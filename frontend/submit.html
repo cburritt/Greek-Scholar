@@ -7,66 +7,176 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Greek Scholar</h1>
-    <div>
-      <span class="muted" id="who"></span>
-      <button class="link" id="logout-btn" type="button">Log out</button>
-    </div>
-  </header>
+  <header id="header"></header>
 
-  <main style="max-width: 480px;">
+  <main class="narrow">
+    <div class="banner" id="missing-banner" hidden></div>
+
     <form class="card" id="grade-form">
-      <h2>Submit your grades</h2>
-      <label>Term
-        <select id="term" required>
-          <option value="Fall 2026">Fall 2026</option>
-          <option value="Spring 2026">Spring 2026</option>
-          <option value="Fall 2025">Fall 2025</option>
-        </select>
-      </label>
-      <label>Term GPA <input type="number" id="gpa" min="0" max="4" step="0.01" required></label>
-      <label>Credit hours <input type="number" id="credits" min="1" step="1" required></label>
-      <button type="submit">Submit</button>
+      <h2>Submit this week's grades</h2>
+      <label>Week <select id="week"></select></label>
+      <p class="muted" id="week-note"></p>
+
+      <div id="grade-rows"></div>
+      <div class="gpa-preview">Estimated GPA: <strong id="gpa-preview">–</strong></div>
+
+      <button type="submit" id="submit-btn">Submit</button>
       <div class="message" id="grade-message"></div>
-      <p class="muted">Submitting again for the same term replaces your earlier submission.</p>
     </form>
+
+    <div class="card" id="no-classes" hidden>
+      <h2>Add your classes first</h2>
+      <p>Before you can submit grades, add the classes you're taking this term.</p>
+      <a href="classes.html"><button type="button">Go to My classes</button></a>
+    </div>
   </main>
 
   <script src="api.js"></script>
+  <script src="app.js"></script>
   <script>
-    const user = currentUser();
-    if (!user) {
-      window.location.href = "index.html";
-    } else if (user.role === "chair") {
-      window.location.href = "chair.html";
-    } else {
-      document.getElementById("who").textContent = user.name;
+    const user = requireRole("member");
+
+    let weeks = [];
+    let courses = [];
+    let scale = [];
+    let history = null;
+
+    async function load() {
+      const term = await getCurrentTerm();
+      if (!term) {
+        document.getElementById("grade-form").hidden = true;
+        showMessage("grade-message", "Your chair hasn't set up a term yet.", "error");
+        return;
+      }
+
+      [weeks, courses, scale, history] = await Promise.all([getWeeks(), getCourses(false), getGradeScale(), getMyHistory()]);
+
+      if (courses.length === 0) {
+        document.getElementById("grade-form").hidden = true;
+        document.getElementById("no-classes").hidden = false;
+        return;
+      }
+
+      const missing = weeks.filter((w) => w.status === "missing");
+      const banner = document.getElementById("missing-banner");
+      banner.hidden = missing.length === 0;
+      if (missing.length === 1) {
+        banner.textContent = "You missed week " + missing[0].number + ". You can still submit it below; it will count as late.";
+      } else if (missing.length > 1) {
+        banner.textContent = "You missed " + missing.length + " weeks. You can still submit them below; they will count as late.";
+      }
+
+      const select = document.getElementById("week");
+      select.innerHTML = "";
+      weeks.forEach((w) => {
+        if (w.status === "not_member") {
+          return;
+        }
+        select.appendChild(el("option", { value: w.id }, weekLabel(w)));
+      });
+
+      // oldest missing week first, otherwise the newest week
+      let pick = weeks[0];
+      if (missing.length > 0) {
+        pick = missing[missing.length - 1];
+      }
+      if (pick) {
+        select.value = pick.id;
+      }
+      renderWeek();
     }
 
-    document.getElementById("logout-btn").addEventListener("click", () => {
-      logout();
-      window.location.href = "index.html";
-    });
+    function renderWeek() {
+      const weekId = Number(document.getElementById("week").value);
+      const week = weeks.find((w) => w.id === weekId);
+      const past = history.weeks.find((w) => w.week_id === weekId);
 
-    document.getElementById("grade-form").addEventListener("submit", (e) => {
+      // fill in what they already sent for this week
+      const previous = {};
+      if (past) {
+        past.classes.forEach((c) => {
+          previous[c.course_id] = c.percent;
+        });
+      }
+
+      let note = "";
+      if (week && (week.status === "on_time" || week.status === "late")) {
+        note = "You already submitted this week. Submitting again replaces it.";
+      } else if (week && week.status === "missing") {
+        note = "This week is past due, so it will be marked late.";
+      }
+      document.getElementById("week-note").textContent = note;
+
+      const rows = document.getElementById("grade-rows");
+      rows.innerHTML = "";
+      courses.forEach((c) => {
+        const row = el("div", { class: "grade-row" });
+        const name = el("div");
+        name.appendChild(el("strong", {}, c.code));
+        name.appendChild(el("span", { class: "muted" }, " · " + c.credits + " cr"));
+        row.appendChild(name);
+
+        const input = el("input", { type: "number", min: "0", max: "120", step: "0.1", placeholder: "%", required: "" });
+        input.dataset.courseId = c.id;
+        input.dataset.credits = c.credits;
+        if (previous[c.id] !== undefined && previous[c.id] !== null) {
+          input.value = previous[c.id];
+        }
+        input.addEventListener("input", updatePreview);
+        row.appendChild(input);
+
+        row.appendChild(el("div", { class: "letter" }, "–"));
+        rows.appendChild(row);
+      });
+      updatePreview();
+    }
+
+    function updatePreview() {
+      const entries = [];
+      document.querySelectorAll("#grade-rows .grade-row").forEach((row) => {
+        const input = row.querySelector("input");
+        const letter = row.querySelector(".letter");
+        if (input.value === "") {
+          letter.textContent = "–";
+          return;
+        }
+        const percent = Number(input.value);
+        const match = letterFor(percent, scale);
+        letter.textContent = "–";
+        if (match) {
+          letter.textContent = match.letter;
+        }
+        entries.push({ percent, credits: Number(input.dataset.credits) });
+      });
+
+      const gpa = previewGpa(entries, scale);
+      document.getElementById("gpa-preview").textContent = formatGpa(gpa);
+    }
+
+    document.getElementById("week").addEventListener("change", renderWeek);
+
+    document.getElementById("grade-form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const msg = document.getElementById("grade-message");
-      const term = document.getElementById("term").value;
+      const grades = [];
+      document.querySelectorAll("#grade-rows input").forEach((input) => {
+        grades.push({ course_id: Number(input.dataset.courseId), percent: Number(input.value) });
+      });
+
+      const weekId = Number(document.getElementById("week").value);
       try {
-        submitGrade(
-          term,
-          parseFloat(document.getElementById("gpa").value),
-          Number(document.getElementById("credits").value)
-        );
-        msg.className = "message success";
-        msg.textContent = "Grades submitted for " + term + ".";
-        e.target.reset();
+        const res = await submitWeek(weekId, grades);
+        await load();
+        document.getElementById("week").value = weekId;
+        renderWeek();
+        showMessage("grade-message", res.message + ".", "success");
       } catch (err) {
-        msg.className = "message error";
-        msg.textContent = err.message;
+        showMessage("grade-message", err.message, "error");
       }
     });
+
+    if (user) {
+      load().catch((err) => showMessage("grade-message", err.message, "error"));
+    }
   </script>
 </body>
 </html>

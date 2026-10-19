@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="header"></header>
+
+  <main class="narrow">
+    <div class="card">
+      <h2>Flag rules</h2>
+      <p class="muted">Turn flags on or off and set when they trigger. Changes apply to every week right away.</p>
+      <table>
+        <thead><tr><th>On</th><th>Flag</th><th>Threshold</th></tr></thead>
+        <tbody id="flag-rows"></tbody>
+      </table>
+      <p><button type="button" id="save-flags">Save flag rules</button></p>
+      <div class="message" id="flag-message"></div>
+    </div>
+
+    <div class="card">
+      <h2>Grade scale</h2>
+      <p class="muted">Percent cutoffs used to turn class grades into letters and GPA points. One row must start at 0.</p>
+      <table>
+        <thead><tr><th>Letter</th><th>Min %</th><th>Points</th><th></th></tr></thead>
+        <tbody id="scale-rows"></tbody>
+      </table>
+      <p class="row">
+        <button type="button" class="secondary" id="add-scale-row">Add row</button>
+        <button type="button" id="save-scale">Save grade scale</button>
+      </p>
+      <div class="message" id="scale-message"></div>
+    </div>
+
+    <div class="card">
+      <h2>Term</h2>
+      <p id="current-term"></p>
+      <form id="term-form">
+        <h3>Start a new term</h3>
+        <p class="muted">A new term becomes the current one on its first day, so you can set it up early. Members add their classes again for each term.</p>
+        <label>Name <input type="text" id="t-name" placeholder="Spring 2027" required></label>
+        <div class="row">
+          <label>First day <input type="date" id="t-start" required></label>
+          <label>Last day <input type="date" id="t-end" required></label>
+        </div>
+        <div class="row">
+          <label>Grades due every
+            <select id="t-weekday">
+              <option value="0">Monday</option>
+              <option value="1">Tuesday</option>
+              <option value="2">Wednesday</option>
+              <option value="3">Thursday</option>
+              <option value="4">Friday</option>
+              <option value="5">Saturday</option>
+              <option value="6" selected>Sunday</option>
+            </select>
+          </label>
+          <label>at <input type="time" id="t-time" value="23:59" required></label>
+        </div>
+        <button type="submit">Create term</button>
+        <div class="message" id="term-message"></div>
+      </form>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const user = requireRole("chair");
+    const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    const UNITS = { gpa_below: "GPA", class_below: "%", gpa_drop: "GPA", class_drop: "%", missed_in_row: "weeks" };
+
+    // flag rules
+
+    async function loadFlags() {
+      const rules = await getFlagRules();
+      const tbody = document.getElementById("flag-rows");
+      tbody.innerHTML = "";
+      rules.forEach((r) => {
+        const tr = el("tr");
+        tr.dataset.kind = r.kind;
+
+        const on = el("td");
+        const box = el("input", { type: "checkbox", class: "enabled" });
+        box.checked = r.enabled;
+        on.appendChild(box);
+        tr.appendChild(on);
+
+        tr.appendChild(el("td", {}, FLAG_LABELS[r.kind]));
+
+        const t = el("td", { class: "nowrap" });
+        if (r.threshold !== null) {
+          const input = el("input", { type: "number", class: "threshold", min: "0", step: "0.1", style: "display: inline-block; width: 90px;" });
+          input.value = r.threshold;
+          t.appendChild(input);
+          t.appendChild(el("span", { class: "muted" }, " " + UNITS[r.kind]));
+        } else {
+          t.appendChild(el("span", { class: "muted" }, "–"));
+        }
+        tr.appendChild(t);
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById("save-flags").addEventListener("click", async () => {
+      const rules = [];
+      let blank = false;
+      document.querySelectorAll("#flag-rows tr").forEach((tr) => {
+        const rule = { kind: tr.dataset.kind, enabled: tr.querySelector(".enabled").checked, threshold: null };
+        const input = tr.querySelector(".threshold");
+        if (input) {
+          if (input.value === "") {
+            blank = true;
+          }
+          rule.threshold = Number(input.value);
+        }
+        rules.push(rule);
+      });
+      if (blank) {
+        showMessage("flag-message", "Every threshold needs a number.", "error");
+        return;
+      }
+      try {
+        await saveFlagRules(rules);
+        showMessage("flag-message", "Flag rules saved.", "success");
+      } catch (err) {
+        showMessage("flag-message", err.message, "error");
+      }
+    });
+
+    // grade scale
+
+    function addScaleRow(row) {
+      const tr = el("tr");
+      const fields = [
+        ["letter", "text", row.letter, ""],
+        ["min_percent", "number", row.min_percent, "0.1"],
+        ["points", "number", row.points, "0.01"],
+      ];
+      fields.forEach(([name, type, value, step]) => {
+        const td = el("td");
+        const input = el("input", { type, class: name, style: "margin: 0;" });
+        if (step) {
+          input.step = step;
+          input.min = "0";
+        }
+        input.value = value;
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+      const td = el("td");
+      const remove = el("button", { type: "button", class: "secondary small" }, "Remove");
+      remove.addEventListener("click", () => tr.remove());
+      td.appendChild(remove);
+      tr.appendChild(td);
+      document.getElementById("scale-rows").appendChild(tr);
+    }
+
+    async function loadScale() {
+      const scale = await getGradeScale();
+      document.getElementById("scale-rows").innerHTML = "";
+      scale.forEach(addScaleRow);
+    }
+
+    document.getElementById("add-scale-row").addEventListener("click", () => {
+      addScaleRow({ letter: "", min_percent: "", points: "" });
+    });
+
+    document.getElementById("save-scale").addEventListener("click", async () => {
+      const rows = [];
+      let blank = false;
+      document.querySelectorAll("#scale-rows tr").forEach((tr) => {
+        const letter = tr.querySelector(".letter").value.trim();
+        const min = tr.querySelector(".min_percent").value;
+        const points = tr.querySelector(".points").value;
+        // empty boxes would turn into 0, so stop here instead
+        if (letter === "" || min === "" || points === "") {
+          blank = true;
+        }
+        rows.push({ letter, min_percent: Number(min), points: Number(points) });
+      });
+      if (blank) {
+        showMessage("scale-message", "Fill in every box, or remove the row.", "error");
+        return;
+      }
+      try {
+        await saveGradeScale(rows);
+        await loadScale();
+        showMessage("scale-message", "Grade scale saved.", "success");
+      } catch (err) {
+        showMessage("scale-message", err.message, "error");
+      }
+    });
+
+    // term
+
+    async function loadTerm() {
+      const term = await getCurrentTerm();
+      const p = document.getElementById("current-term");
+      if (!term) {
+        p.textContent = "No term yet. Create one below so members can start submitting.";
+        return;
+      }
+      const due = term.due_time.slice(0, 5);
+      p.textContent = "Current term: " + term.name + " (" + term.start_date + " to " + term.end_date + "), grades due " + WEEKDAYS[term.due_weekday] + "s at " + due + ".";
+    }
+
+    document.getElementById("term-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("t-name").value;
+      if (!confirm("Create " + name + "? It becomes the current term for everyone on its first day.")) {
+        return;
+      }
+      try {
+        const term = await createTerm({
+          name: document.getElementById("t-name").value,
+          start_date: document.getElementById("t-start").value,
+          end_date: document.getElementById("t-end").value,
+          due_weekday: Number(document.getElementById("t-weekday").value),
+          due_time: document.getElementById("t-time").value,
+        });
+        showMessage("term-message", "Created " + term.name + ".", "success");
+        e.target.reset();
+        loadTerm();
+      } catch (err) {
+        showMessage("term-message", err.message, "error");
+      }
+    });
+
+    if (user) {
+      Promise.all([loadFlags(), loadScale(), loadTerm()]).catch((err) => showMessage("flag-message", err.message, "error"));
+    }
+  </script>
+</body>
+</html>

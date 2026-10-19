@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Member Detail</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <header id="header"></header>
+
+  <main>
+    <p><a href="chair.html" id="back-link"><button type="button" class="secondary">← Back to members</button></a></p>
+
+    <div class="card">
+      <p class="muted">Viewing as chair · read only</p>
+      <h2 id="member-name"></h2>
+      <p class="muted" id="member-info"></p>
+      <div id="member-classes"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h3>GPA by week</h3>
+        <div class="chart-box"><canvas id="gpa-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Class grades by week</h3>
+        <div class="chart-box"><canvas id="class-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>All weeks</h3>
+      <div class="table-wrap">
+        <table>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="message" id="message"></div>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script src="charts.js"></script>
+  <script>
+    const user = requireRole("chair");
+
+    // go back to the members table with the same week and filters
+    const from = new URLSearchParams(window.location.search).get("from");
+    if (from && from.startsWith("?")) {
+      document.getElementById("back-link").href = "chair.html" + from;
+    }
+
+    async function load() {
+      const id = new URLSearchParams(window.location.search).get("id");
+      const history = await getMemberHistory(id);
+
+      document.getElementById("member-name").textContent = history.user.name;
+      document.getElementById("member-info").textContent = history.user.email + " · pledge class " + history.user.pledge_class;
+      document.title = history.user.name;
+
+      const box = document.getElementById("member-classes");
+      history.courses.forEach((c) => {
+        let text = c.code + " · " + c.credits + " cr";
+        if (c.dropped_at) {
+          text += " · dropped " + formatDate(c.dropped_at);
+        }
+        box.appendChild(el("span", { class: "pill" }, text));
+      });
+
+      renderGpaChart("gpa-chart", history.weeks);
+      renderClassChart("class-chart", history.weeks);
+      renderHistoryTable(history.weeks, true);
+    }
+
+    if (user) {
+      load().catch((err) => showMessage("message", err.message, "error"));
+    }
+  </script>
+</body>
+</html>
