@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chair Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Greek Scholar</h1>
+    <div>
+      <span class="muted" id="who"></span>
+      <button class="link" id="logout-btn" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Members</h2>
+      <div class="filters">
+        <label>Term <select id="f-term"></select></label>
+        <label>Pledge class <select id="f-pledge"></select></label>
+        <label>GPA at or below <input type="number" id="f-max-gpa" min="0" max="4" step="0.1" placeholder="any"></label>
+        <label>Status
+          <select id="f-submitted">
+            <option value="">All</option>
+            <option value="yes">Submitted</option>
+            <option value="no">Missing</option>
+          </select>
+        </label>
+        <label>Sort by
+          <select id="f-sort">
+            <option value="name">Name</option>
+            <option value="gpa">GPA (lowest first)</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted" id="count"></p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Pledge class</th>
+              <th>Term</th>
+              <th>GPA</th>
+              <th>Credit hours</th>
+              <th>Submitted</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="muted">Rows in red are below a 2.5 GPA.</p>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script>
+    const LOW_GPA = 2.5;
+
+    const user = currentUser();
+    if (!user) {
+      window.location.href = "index.html";
+    } else if (user.role !== "chair") {
+      window.location.href = "submit.html";
+    } else {
+      document.getElementById("who").textContent = user.name;
+      setupFilters();
+      render();
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      logout();
+      window.location.href = "index.html";
+    });
+
+    function addOption(select, value, text) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = text;
+      select.appendChild(opt);
+    }
+
+    function setupFilters() {
+      // always offer the current term even before anyone submits
+      const terms = [...new Set(["Fall 2026", ...getTerms()])].sort(compareTerms);
+      const termSelect = document.getElementById("f-term");
+      terms.forEach((t) => addOption(termSelect, t, t));
+
+      const pledgeSelect = document.getElementById("f-pledge");
+      addOption(pledgeSelect, "", "All");
+      getPledgeClasses().forEach((p) => addOption(pledgeSelect, p, p));
+
+      ["f-term", "f-pledge", "f-max-gpa", "f-submitted", "f-sort"].forEach((id) => {
+        document.getElementById(id).addEventListener("input", render);
+      });
+    }
+
+    function addCell(tr, text, className) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (className) {
+        td.className = className;
+      }
+      tr.appendChild(td);
+    }
+
+    function render() {
+      const rows = getMembers({
+        term: document.getElementById("f-term").value,
+        pledgeClass: document.getElementById("f-pledge").value,
+        maxGpa: document.getElementById("f-max-gpa").value,
+        submitted: document.getElementById("f-submitted").value,
+        sort: document.getElementById("f-sort").value,
+      });
+
+      const tbody = document.getElementById("rows");
+      tbody.innerHTML = "";
+
+      rows.forEach((r) => {
+        const tr = document.createElement("tr");
+        addCell(tr, r.name);
+        addCell(tr, r.pledgeClass);
+        addCell(tr, r.term);
+        if (r.gpa === null) {
+          addCell(tr, "not submitted", "missing");
+          addCell(tr, "");
+          addCell(tr, "");
+        } else {
+          if (r.gpa < LOW_GPA) {
+            tr.className = "low";
+          }
+          addCell(tr, r.gpa.toFixed(2));
+          addCell(tr, r.creditHours);
+          addCell(tr, new Date(r.submittedAt).toLocaleDateString());
+        }
+        tbody.appendChild(tr);
+      });
+
+      let label = rows.length + " members";
+      if (rows.length === 1) {
+        label = "1 member";
+      }
+      document.getElementById("count").textContent = label;
+    }
+  </script>
+</body>
+</html>

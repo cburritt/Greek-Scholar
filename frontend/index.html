@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Greek Scholar</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Greek Scholar</h1>
+  </header>
+
+  <main>
+    <div class="two-col">
+      <form class="card" id="login-form">
+        <h2>Log in</h2>
+        <label>Email <input type="email" id="login-email" required></label>
+        <label>Password <input type="password" id="login-password" required></label>
+        <button type="submit">Log in</button>
+        <div class="message error" id="login-message"></div>
+      </form>
+
+      <form class="card" id="register-form">
+        <h2>Create account</h2>
+        <label>Name <input type="text" id="reg-name" required></label>
+        <label>Email <input type="email" id="reg-email" required></label>
+        <label>Password <input type="password" id="reg-password" required minlength="6"></label>
+        <label>Pledge class
+          <select id="reg-pledge" required>
+            <option value="Fall 2026">Fall 2026</option>
+            <option value="Spring 2026">Spring 2026</option>
+            <option value="Fall 2025">Fall 2025</option>
+            <option value="Spring 2025">Spring 2025</option>
+            <option value="Fall 2024">Fall 2024</option>
+            <option value="Spring 2024">Spring 2024</option>
+          </select>
+        </label>
+        <label style="display: flex; gap: 8px; align-items: flex-start;">
+          <input type="checkbox" id="reg-consent" required style="width: auto; margin-top: 2px;">
+          I agree to share my grades with my house's scholarship chair.
+        </label>
+        <button type="submit">Create account</button>
+        <div class="message error" id="register-message"></div>
+      </form>
+    </div>
+
+    <p class="muted">
+      Demo data lives in your browser.
+      <button class="link" id="reset-btn" type="button">Reset demo data</button>
+    </p>
+  </main>
+
+  <script src="api.js"></script>
+  <script>
+    // send the user to the right page for their role
+    function goHome(user) {
+      if (user.role === "chair") {
+        window.location.href = "chair.html";
+      } else {
+        window.location.href = "submit.html";
+      }
+    }
+
+    const existing = currentUser();
+    if (existing) {
+      goHome(existing);
+    }
+
+    document.getElementById("login-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("login-message");
+      try {
+        const user = login(
+          document.getElementById("login-email").value,
+          document.getElementById("login-password").value
+        );
+        goHome(user);
+      } catch (err) {
+        msg.textContent = err.message;
+      }
+    });
+
+    document.getElementById("register-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("register-message");
+      try {
+        const user = register(
+          document.getElementById("reg-name").value,
+          document.getElementById("reg-email").value,
+          document.getElementById("reg-password").value,
+          document.getElementById("reg-pledge").value
+        );
+        goHome(user);
+      } catch (err) {
+        msg.textContent = err.message;
+      }
+    });
+
+    document.getElementById("reset-btn").addEventListener("click", () => {
+      resetDemoData();
+      window.location.reload();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit Grades</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Greek Scholar</h1>
+    <div>
+      <span class="muted" id="who"></span>
+      <button class="link" id="logout-btn" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main style="max-width: 480px;">
+    <form class="card" id="grade-form">
+      <h2>Submit your grades</h2>
+      <label>Term
+        <select id="term" required>
+          <option value="Fall 2026">Fall 2026</option>
+          <option value="Spring 2026">Spring 2026</option>
+          <option value="Fall 2025">Fall 2025</option>
+        </select>
+      </label>
+      <label>Term GPA <input type="number" id="gpa" min="0" max="4" step="0.01" required></label>
+      <label>Credit hours <input type="number" id="credits" min="1" step="1" required></label>
+      <button type="submit">Submit</button>
+      <div class="message" id="grade-message"></div>
+      <p class="muted">Submitting again for the same term replaces your earlier submission.</p>
+    </form>
+  </main>
+
+  <script src="api.js"></script>
+  <script>
+    const user = currentUser();
+    if (!user) {
+      window.location.href = "index.html";
+    } else if (user.role === "chair") {
+      window.location.href = "chair.html";
+    } else {
+      document.getElementById("who").textContent = user.name;
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      logout();
+      window.location.href = "index.html";
+    });
+
+    document.getElementById("grade-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("grade-message");
+      const term = document.getElementById("term").value;
+      try {
+        submitGrade(
+          term,
+          parseFloat(document.getElementById("gpa").value),
+          Number(document.getElementById("credits").value)
+        );
+        msg.className = "message success";
+        msg.textContent = "Grades submitted for " + term + ".";
+        e.target.reset();
+      } catch (err) {
+        msg.className = "message error";
+        msg.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -115,15 +115,24 @@ Query parameter filters:
 
 ```
 scholarship-tracker/
-  main.py           # routes
-  models.py         # User, GradeSubmission
-  database.py       # sqlite setup
-  auth.py           # hashing, tokens, chair check
-  seed.py           # creates the chair account
-  requirements.txt
+  backend/
+    main.py           # routes
+    models.py         # User, GradeSubmission, request/response shapes
+    database.py       # sqlite setup
+    auth.py           # hashing, tokens, chair/member checks
+    seed.py           # creates the chair account
+    requirements.txt
+  frontend/
+    index.html        # log in / register
+    submit.html       # member grade form
+    chair.html        # chair members table
+    api.js            # fake api for now, will call the backend
+    style.css
   DESIGN.md
   README.md
 ```
+
+`POST /login` takes a form with `username` (the email) and `password` so the Authorize button in `/docs` works. Both `/register` and `/login` return a token plus the user.
 
 ## Build order
 
