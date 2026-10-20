@@ -86,8 +86,15 @@
       renderWeek();
     }
 
-    function renderWeek() {
+    async function renderWeek() {
       const weekId = Number(document.getElementById("week").value);
+      // a past week shows the classes they had that week, including ones dropped since
+      let weekCourses = courses;
+      try {
+        weekCourses = await getWeekCourses(weekId);
+      } catch (err) {
+        showMessage("grade-message", err.message, "error");
+      }
       const week = weeks.find((w) => w.id === weekId);
       const past = history.weeks.find((w) => w.week_id === weekId);
 
@@ -109,11 +116,14 @@
 
       const rows = document.getElementById("grade-rows");
       rows.innerHTML = "";
-      courses.forEach((c) => {
+      weekCourses.forEach((c) => {
         const row = el("div", { class: "grade-row" });
         const name = el("div");
         name.appendChild(el("strong", {}, c.code));
         name.appendChild(el("span", { class: "muted" }, " · " + c.credits + " cr"));
+        if (c.dropped_at) {
+          name.appendChild(el("span", { class: "muted" }, " · dropped since"));
+        }
         row.appendChild(name);
 
         const input = el("input", { type: "number", min: "0", max: "120", step: "0.1", placeholder: "%", required: "" });
@@ -167,7 +177,7 @@
         const res = await submitWeek(weekId, grades);
         await load();
         document.getElementById("week").value = weekId;
-        renderWeek();
+        await renderWeek();
         showMessage("grade-message", res.message + ".", "success");
       } catch (err) {
         showMessage("grade-message", err.message, "error");

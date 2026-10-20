@@ -8,8 +8,9 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
 import chair_routes
+import manage_routes
 import member_routes
-from auth import create_token, get_current_user, hash_password, verify_password
+from auth import DUMMY_HASH, create_token, get_current_user, hash_password, verify_password
 from database import create_db, get_session
 from grading import load_scale
 from models import GradeScale, HouseSettings, RegisterIn, Submission, Term, TokenOut, User, UserOut, WeekOut
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(member_routes.router)
 app.include_router(chair_routes.router)
+app.include_router(manage_routes.router)
 
 
 def token_for(user: User) -> TokenOut:
@@ -45,17 +47,20 @@ def token_for(user: User) -> TokenOut:
 @app.post("/register", response_model=TokenOut, tags=["auth"])
 def register(data: RegisterIn, session: Session = Depends(get_session)):
     email = data.email.strip().lower()
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name can't be blank")
     existing = session.exec(select(User).where(User.email == email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="An account with that email already exists")
 
     # everyone who registers is a member
     user = User(
-        name=data.name.strip(),
+        name=name,
         email=email,
         password_hash=hash_password(data.password),
         role="member",
-        pledge_class=data.pledge_class,
+        pledge_class=data.pledge_class.strip(),
     )
     session.add(user)
     session.commit()
@@ -68,8 +73,14 @@ def login(form: OAuth2PasswordRequestForm = Depends(), session: Session = Depend
     # the form calls it username but it is the email
     email = form.username.strip().lower()
     user = session.exec(select(User).where(User.email == email)).first()
-    if not user or not verify_password(form.password, user.password_hash):
+    if user is None:
+        # still check a password so a wrong email takes as long as a wrong password
+        verify_password(form.password, DUMMY_HASH)
         raise HTTPException(status_code=401, detail="Wrong email or password")
+    if not verify_password(form.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Wrong email or password")
+    if not user.active:
+        raise HTTPException(status_code=403, detail="This account has been deactivated. Talk to your scholarship chair.")
     return token_for(user)
 
 

@@ -106,7 +106,8 @@ function renderHouseChart(canvasId, stats) {
 }
 
 // newest week first, one column per class
-function renderHistoryTable(weeks, showFlags) {
+// actions (chair only): { onMute(week, flag), onUnmute(flag), onCorrect(week) }
+function renderHistoryTable(weeks, showFlags, actions) {
   const codes = allClassCodes(weeks);
 
   const head = document.getElementById("table-head");
@@ -117,13 +118,16 @@ function renderHistoryTable(weeks, showFlags) {
   if (showFlags) {
     hr.appendChild(el("th", {}, "Flags"));
   }
+  if (actions) {
+    hr.appendChild(el("th", {}, ""));
+  }
   head.appendChild(hr);
 
   const body = document.getElementById("table-body");
   body.innerHTML = "";
   [...weeks].reverse().forEach((w) => {
     const tr = el("tr");
-    if (showFlags && w.flags.length > 0) {
+    if (showFlags && activeFlags(w.flags).length > 0) {
       tr.className = "flagged";
     }
 
@@ -146,6 +150,9 @@ function renderHistoryTable(weeks, showFlags) {
       const c = w.classes.find((x) => x.code === code);
       if (c) {
         td.appendChild(el("span", {}, c.percent + "% " + (c.letter || "")));
+        if (c.corrected) {
+          td.appendChild(el("span", { class: "corrected", title: "Corrected by the scholarship chair" }, " ✎"));
+        }
         if (c.change !== null) {
           td.appendChild(el("br"));
           td.appendChild(changeCell(c.change, 1, "%"));
@@ -159,7 +166,33 @@ function renderHistoryTable(weeks, showFlags) {
 
     if (showFlags) {
       const td = el("td");
-      w.flags.forEach((f) => td.appendChild(flagBadge(f)));
+      w.flags.forEach((f) => {
+        const wrap = el("span", { class: "flag-wrap" });
+        wrap.appendChild(flagBadge(f));
+        if (actions) {
+          let btn;
+          if (f.muted) {
+            btn = el("button", { type: "button", class: "link tiny" }, "unmute");
+            btn.addEventListener("click", () => actions.onUnmute(f));
+          } else {
+            btn = el("button", { type: "button", class: "link tiny" }, "mute");
+            btn.addEventListener("click", () => actions.onMute(w, f));
+          }
+          wrap.appendChild(btn);
+        }
+        td.appendChild(wrap);
+      });
+      tr.appendChild(td);
+    }
+
+    if (actions) {
+      const td = el("td");
+      // only weeks the member actually submitted can be corrected
+      if (w.classes.length > 0) {
+        const btn = el("button", { type: "button", class: "secondary small" }, "Correct");
+        btn.addEventListener("click", () => actions.onCorrect(w));
+        td.appendChild(btn);
+      }
       tr.appendChild(td);
     }
     body.appendChild(tr);

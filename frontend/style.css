@@ -355,3 +355,104 @@ tr.flagged td:first-child {
   position: relative;
   height: 240px;
 }
+
+/* chair management */
+
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+}
+
+button.danger {
+  background: var(--error);
+  color: white;
+}
+
+button.tiny {
+  font-size: 12px;
+  margin-right: 8px;
+}
+
+label.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0 0;
+}
+
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.title-row h2 {
+  margin: 4px 0;
+}
+
+.badge.flag.muted-flag {
+  background: var(--bg);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.flag-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 6px;
+}
+
+.corrected {
+  color: var(--accent);
+  cursor: help;
+}
+
+tr.inactive td {
+  opacity: 0.6;
+}
+
+.note,
+.log-row {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+  font-size: 14px;
+}
+
+.note-text {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.log-change {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+.dialog {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: min(440px, calc(100vw - 32px));
+  background: var(--card);
+  color: var(--text);
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.dialog .row {
+  justify-content: flex-end;
+}

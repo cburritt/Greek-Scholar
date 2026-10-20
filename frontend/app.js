@@ -105,7 +105,85 @@ function statusBadge(status) {
 }
 
 function flagBadge(flag) {
-  return el("span", { class: "badge flag" }, flag.label);
+  const badge = el("span", { class: "badge flag" }, flag.label);
+  // muted flags stay visible but gray, with the reason on hover
+  if (flag.muted) {
+    badge.classList.add("muted-flag");
+    badge.textContent = flag.label + " (muted)";
+    badge.title = "Muted: " + (flag.mute_reason || "");
+  }
+  return badge;
+}
+
+// only flags the chair hasn't muted
+function activeFlags(flags) {
+  return flags.filter((f) => !f.muted);
+}
+
+// a small form in a popup, resolves to the filled in values or null if cancelled
+// fields: [{ name, label, type: "text" | "number" | "textarea" | "select", value, options, required, min, max, step }]
+function formDialog(title, fields, confirmText, danger, help) {
+  return new Promise((resolve) => {
+    const dialog = el("dialog", { class: "dialog" });
+    const form = el("form", { method: "dialog" });
+    form.appendChild(el("h3", {}, title));
+    if (help) {
+      form.appendChild(el("p", { class: "muted" }, help));
+    }
+
+    fields.forEach((f) => {
+      const label = el("label", {}, f.label);
+      let input;
+      if (f.type === "textarea") {
+        input = el("textarea", { rows: "4" });
+      } else if (f.type === "select") {
+        input = el("select");
+        f.options.forEach((o) => input.appendChild(el("option", { value: o.value }, o.text)));
+      } else {
+        input = el("input", { type: f.type || "text" });
+        ["min", "max", "step"].forEach((key) => {
+          if (f[key] !== undefined) {
+            input.setAttribute(key, f[key]);
+          }
+        });
+      }
+      input.name = f.name;
+      if (f.required) {
+        input.required = true;
+      }
+      if (f.value !== undefined && f.value !== null) {
+        input.value = f.value;
+      }
+      label.appendChild(input);
+      form.appendChild(label);
+    });
+
+    const buttons = el("div", { class: "row" });
+    const cancel = el("button", { type: "button", class: "secondary" }, "Cancel");
+    const ok = el("button", { type: "submit" }, confirmText);
+    if (danger) {
+      ok.classList.add("danger");
+    }
+    buttons.appendChild(cancel);
+    buttons.appendChild(ok);
+    form.appendChild(buttons);
+    dialog.appendChild(form);
+    document.body.appendChild(dialog);
+
+    let result = null;
+    cancel.addEventListener("click", () => dialog.close());
+    form.addEventListener("submit", () => {
+      result = {};
+      fields.forEach((f) => {
+        result[f.name] = form.elements[f.name].value;
+      });
+    });
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(result);
+    });
+    dialog.showModal();
+  });
 }
 
 function formatDue(iso) {

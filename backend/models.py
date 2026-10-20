@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime, time
 from typing import Optional
 
-from pydantic import NaiveDatetime
+from pydantic import NaiveDatetime, field_validator
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
 
@@ -15,6 +16,8 @@ class User(SQLModel, table=True):
     role: str = "member"  # member or chair
     pledge_class: str = ""
     created_at: NaiveDatetime = Field(default_factory=datetime.now)
+    # deactivated members cannot log in and are hidden from the chair views
+    active: bool = True
 
 
 class Term(SQLModel, table=True):
@@ -65,6 +68,9 @@ class ClassGrade(SQLModel, table=True):
     # percent schools fill percent, letter schools would fill letter
     percent: Optional[float] = None
     letter: Optional[str] = None
+    # set when the chair corrects this grade, cleared when the member resubmits
+    corrected_at: Optional[NaiveDatetime] = None
+    corrected_by: Optional[int] = Field(default=None, foreign_key="user.id")
 
 
 class GradeScale(SQLModel, table=True):
@@ -87,13 +93,77 @@ class HouseSettings(SQLModel, table=True):
     grade_entry: str = "percent"
 
 
+class FlagMute(SQLModel, table=True):
+    # one mute per flag per member per week, course_id is only for class flags
+    __table_args__ = (UniqueConstraint("user_id", "week_id", "kind", "course_id"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    week_id: int = Field(foreign_key="week.id")
+    kind: str
+    course_id: Optional[int] = Field(default=None, foreign_key="course.id")
+    # the flag text when it was muted, e.g. "PHYS 213 below 70%"
+    label: str = ""
+    reason: str
+    muted_by: int = Field(foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
+
+
+class Note(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    week_id: Optional[int] = Field(default=None, foreign_key="week.id")
+    author_id: int = Field(foreign_key="user.id")
+    text: str
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
+    updated_at: NaiveDatetime = Field(default_factory=datetime.now)
+
+
+class AuditLog(SQLModel, table=True):
+    # rows are only ever added, never edited
+    id: Optional[int] = Field(default=None, primary_key=True)
+    actor_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    action: str
+    target_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    week_id: Optional[int] = Field(default=None, foreign_key="week.id")
+    course_id: Optional[int] = Field(default=None, foreign_key="course.id")
+    detail: str = ""
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    reason: str = ""
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
+
+
 # request and response shapes
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def check_password(password: str) -> str:
+    # bcrypt only reads the first 72 bytes and newer versions reject longer ones
+    if len(password.encode()) > 72:
+        raise ValueError("Password is too long (72 bytes max)")
+    return password
+
+
 class RegisterIn(SQLModel):
-    name: str = Field(min_length=1)
-    email: str = Field(min_length=3)
-    password: str = Field(min_length=6)
-    pledge_class: str
+    name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8)
+    pledge_class: str = Field(max_length=40)
+
+    @field_validator("password")
+    @classmethod
+    def password_length(cls, value):
+        return check_password(value)
+
+    @field_validator("email")
+    @classmethod
+    def email_shape(cls, value):
+        # something@something.something, real checking would need a confirmation email
+        if not EMAIL_RE.match(value.strip()):
+            raise ValueError("Enter a valid email address")
+        return value
 
 
 class UserOut(SQLModel):
@@ -102,6 +172,7 @@ class UserOut(SQLModel):
     email: str
     role: str
     pledge_class: str
+    active: bool = True
 
 
 class TokenOut(SQLModel):
@@ -111,7 +182,7 @@ class TokenOut(SQLModel):
 
 
 class TermIn(SQLModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=40)
     start_date: date
     end_date: date
     due_weekday: int = Field(ge=0, le=6)
@@ -128,8 +199,8 @@ class WeekOut(SQLModel):
 
 
 class CourseIn(SQLModel):
-    code: str = Field(min_length=1)
-    name: str = ""
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(default="", max_length=100)
     credits: int = Field(gt=0, le=12)
 
 
@@ -140,7 +211,7 @@ class GradeEntry(SQLModel):
 
 class SubmissionIn(SQLModel):
     week_id: int
-    grades: list[GradeEntry] = Field(min_length=1)
+    grades: list[GradeEntry] = Field(min_length=1, max_length=20)
 
 
 class ClassResult(SQLModel):
@@ -150,11 +221,16 @@ class ClassResult(SQLModel):
     percent: Optional[float] = None
     letter: Optional[str] = None
     change: Optional[float] = None
+    corrected: bool = False
 
 
 class FlagOut(SQLModel):
     kind: str
     label: str
+    course_id: Optional[int] = None
+    muted: bool = False
+    mute_id: Optional[int] = None
+    mute_reason: Optional[str] = None
 
 
 class WeekResult(SQLModel):
@@ -174,6 +250,7 @@ class MemberRow(SQLModel):
     name: str
     email: str
     pledge_class: str
+    active: bool
     status: str
     submitted_at: Optional[NaiveDatetime] = None
     gpa: Optional[float] = None
@@ -209,3 +286,58 @@ class GradeScaleIn(SQLModel):
     letter: str = Field(min_length=1, max_length=3)
     min_percent: float = Field(ge=0, le=120)
     points: float = Field(ge=0, le=5)
+
+
+# chair management
+
+class MuteIn(SQLModel):
+    kind: str
+    course_id: Optional[int] = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CorrectIn(SQLModel):
+    percent: float = Field(ge=0, le=120)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class NoteIn(SQLModel):
+    text: str = Field(min_length=1, max_length=2000)
+    week_id: Optional[int] = None
+
+
+class NoteOut(SQLModel):
+    id: int
+    week_id: Optional[int] = None
+    week_number: Optional[int] = None
+    author_name: str
+    text: str
+    created_at: NaiveDatetime
+    updated_at: NaiveDatetime
+
+
+class MemberEditIn(SQLModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    pledge_class: Optional[str] = Field(default=None, max_length=40)
+
+
+class ReasonIn(SQLModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class DeleteMemberIn(SQLModel):
+    confirm_name: str
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class LogEntryOut(SQLModel):
+    id: int
+    actor_name: str
+    action: str
+    week_number: Optional[int] = None
+    course_code: Optional[str] = None
+    detail: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    reason: str
+    created_at: NaiveDatetime

@@ -8,9 +8,10 @@ from datetime import date, datetime, time, timedelta
 
 from sqlmodel import Session, select
 
+from audit import fmt_percent, log
 from auth import hash_password
 from database import create_db, engine
-from models import ClassGrade, Course, Submission, Term, User, Week
+from models import ClassGrade, Course, FlagMute, Note, Submission, Term, User, Week
 from tracking import generate_weeks
 
 args = [a for a in sys.argv[1:] if a != "--sample"]
@@ -142,6 +143,44 @@ def seed_sample(session: Session, term: Term):
             session.commit()
 
     print(f"added {len(SAMPLE_MEMBERS)} sample members (password test123)")
+    seed_management(session, weeks, now)
+
+
+def seed_management(session: Session, weeks: list[Week], now: datetime):
+    # a few chair actions so the member page has something to show
+    chair = session.exec(select(User).where(User.role == "chair")).first()
+    jordan = session.exec(select(User).where(User.email == "jordan@test.com")).first()
+    riley = session.exec(select(User).where(User.email == "riley@test.com")).first()
+    due = [w for w in weeks if w.due_at < now]
+    if chair is None or jordan is None or not due:
+        return
+    last = due[-1]
+
+    session.add(Note(user_id=jordan.id, week_id=last.id, author_id=chair.id, text="Talked after chapter. Going to PHYS 213 office hours on Tuesdays.", created_at=now, updated_at=now))
+    log(session, chair.id, "add_note", jordan.id, week_id=last.id, new_value="Talked after chapter. Going to PHYS 213 office hours on Tuesdays.")
+
+    # fix a typo on an older week
+    sub = session.exec(select(Submission).where(Submission.user_id == jordan.id, Submission.week_id == due[2].id)).first()
+    if sub is not None:
+        grade = session.exec(select(ClassGrade).where(ClassGrade.submission_id == sub.id)).first()
+        old = grade.percent
+        grade.percent = round(old + 9, 1)
+        grade.corrected_at = now
+        grade.corrected_by = chair.id
+        session.add(grade)
+        log(session, chair.id, "correct_grade", jordan.id, week_id=due[2].id, course_id=grade.course_id,
+            old_value=fmt_percent(old), new_value=fmt_percent(grade.percent), reason="Typo, checked his Canvas")
+
+    session.add(FlagMute(user_id=jordan.id, week_id=last.id, kind="gpa_below", label="GPA below 2.5", reason="Already meeting weekly about it", muted_by=chair.id))
+    log(session, chair.id, "mute_flag", jordan.id, week_id=last.id, detail="GPA below 2.5", reason="Already meeting weekly about it")
+
+    if riley is not None:
+        riley.active = False
+        session.add(riley)
+        log(session, chair.id, "deactivate", riley.id, reason="Transferred schools")
+
+    session.commit()
+    print("added a sample note, correction and muted flag for Jordan, and deactivated Riley")
 
 
 with Session(engine) as session:

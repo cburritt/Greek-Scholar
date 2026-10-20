@@ -9,7 +9,7 @@ The long-term goal is to support multiple houses and schools. The current versio
 ## How it works
 
 1. The chair sets up a **term**: first day, last day, and the weekly due day and time (e.g. Sundays at 11:59pm). Every week of the term is generated up front.
-2. Each member adds **their classes** for the term (course code, credits). They can add or drop classes at any time.
+2. Each member adds **their classes** for the term (course code, credits). They can add or drop classes at any time. A week's form asks for every current class, plus any class that was dropped *after* that week's deadline, so going back to fix an old week doesn't lose a dropped class's grade.
 3. Each week, the member enters a **current % for every class**. The app turns those into letter grades and a credit-weighted GPA using the house's grading scale.
 4. A submission made after the deadline still counts for the week it was due, but is marked **late**.
 5. Once a deadline passes, members who haven't submitted are marked **missing**.
@@ -21,7 +21,7 @@ The long-term goal is to support multiple houses and schools. The current versio
 | Role | Can do |
 |---|---|
 | **Member** | Register, manage their classes, submit weekly grades, view their own history |
-| **Chair** | View the members table, member history and house trends; set up terms; edit flag rules and the grading scale |
+| **Chair** | View the members table, member history and house trends; set up terms; edit flag rules and the grading scale; mute flags, correct grades, keep notes, edit, deactivate or delete members |
 
 There is one chair, created by the seed script. Everyone who registers is a member.
 
@@ -39,12 +39,15 @@ There is one chair, created by the seed script. Everyone who registers is a memb
 
 | Table | Fields | Notes |
 |---|---|---|
-| **User** | name, email, password_hash, role, pledge_class, created_at | `created_at` is used so weeks due before someone joined don't count as missing |
+| **User** | name, email, password_hash, role, pledge_class, created_at, active | `created_at` is used so weeks due before someone joined don't count as missing. `active` is false for deactivated members. |
 | **Term** | name, start_date, end_date, due_weekday, due_time | `due_weekday`: 0 = Monday … 6 = Sunday |
 | **Week** | term_id, number, start_date, due_at | generated when the term is created |
 | **Course** | user_id, term_id, code, name, credits, dropped_at | dropping sets `dropped_at` instead of deleting, so past weeks keep the class |
 | **Submission** | user_id, week_id, submitted_at, updated_at | one per user per week. `submitted_at` is the *first* submit time and decides late. |
-| **ClassGrade** | submission_id, course_id, percent, letter | percent schools fill `percent`, letter schools would fill `letter` |
+| **ClassGrade** | submission_id, course_id, percent, letter, corrected_at, corrected_by | percent schools fill `percent`, letter schools would fill `letter`. `corrected_*` is set when the chair corrects it. |
+| **FlagMute** | user_id, week_id, kind, course_id, label, reason, muted_by, created_at | see Chair management |
+| **Note** | user_id, week_id, author_id, text, created_at, updated_at | chair only |
+| **AuditLog** | actor_id, action, target_user_id, week_id, course_id, detail, old_value, new_value, reason, created_at | the change log |
 | **GradeScale** | letter, min_percent, points | editable by the chair |
 | **FlagRule** | kind, threshold, enabled | editable by the chair |
 | **HouseSettings** | grade_entry | `percent` for now, `letter` later |
@@ -104,6 +107,96 @@ Flags are calculated whenever a week is loaded, so changing a rule updates the w
 
 Members never see flags.
 
+## Chair management
+
+Every management action is done **as the chair**, through chair-only routes, and is written to the **change log**. The chair never logs in as a member. Every week still has to be submitted; there is no "excused" status.
+
+### Mute a flag
+
+The chair can mute **one flag on one member's week**, with a reason. Example: mute "PHYS 213 below 70%" on week 8 because the member was sick.
+
+- A mute matches the flag's `kind` plus, for class flags, its `course_id`. Muting "PHYS 213 below 70%" doesn't mute "MATH 221 below 70%".
+- A muted flag still appears on the member page, grayed out with the reason, so the history is visible.
+- A muted flag is skipped by the "Any flag" and per-flag filters, and doesn't give the row a red edge.
+- **Status never changes.** A missing week stays missing in the table and in the house missing count.
+- `missed_in_row` is muted only on the week it was muted on. If the streak keeps growing, it shows up again the next week, so a mute can't hide a growing problem.
+- Members never see flags or mutes.
+
+### Correct a grade
+
+The chair can change one class's % on a week **that already has a submission**. A reason is required.
+
+- The chair can't fill in a missing week. That week has to come from the member.
+- On-time/late status doesn't change
+- The member sees a **"corrected by chair"** marker on that grade, but not the reason
+- If the member resubmits that week later, their new values replace the correction, and the marker goes away. The resubmit is logged too.
+
+### Notes
+
+Private chair notes about a member, either general or tied to one week. The chair can add, edit and delete them. Members never see notes.
+
+### Edit a member
+
+The chair can change a member's **name** and **pledge class**. Email and password belong to the member.
+
+### Remove a member
+
+| Action | What happens | Undo |
+|---|---|---|
+| **Deactivate** | They can't log in, and any token they already have stops working. They're hidden from the members table, stats, pledge class list and flags. All their data is kept, and the chair can still open their page from "Show inactive". | Reactivate |
+| **Permanent delete** | Their account, classes, submissions, grades, notes, mutes and change log entries are all erased. The chair must type the member's full name to confirm, and the backend checks it too. One log entry ("deleted a member") is kept, with the reason but no name. | None |
+
+Only member accounts can be deactivated or deleted; the chair account can't.
+
+### Change log
+
+Every management action, plus every member resubmit that changes a grade, adds a row. Rows are never edited or deleted, except when the member they're about is permanently deleted.
+
+| Action | Logged values |
+|---|---|
+| `correct_grade` | week, class, old % → new %, reason |
+| `resubmit_grade` | week, class, old % → new % (actor is the member) |
+| `mute_flag` / `unmute_flag` | week, flag label, reason |
+| `add_note` / `edit_note` / `delete_note` | week (if any), note text |
+| `edit_member` | field, old → new |
+| `deactivate` / `reactivate` | reason |
+| `delete_member` | reason only |
+
+### New tables and fields
+
+| Table / field | Fields | Notes |
+|---|---|---|
+| **FlagMute** | user_id, week_id, kind, course_id, label, reason, muted_by, created_at | unique per user + week + kind + course. `label` keeps the flag text, e.g. "PHYS 213 below 70%". |
+| **Note** | user_id, week_id (optional), author_id, text, created_at, updated_at | |
+| **AuditLog** | actor_id, action, target_user_id, week_id, course_id, detail, old_value, new_value, reason, created_at | `detail` holds a readable label, e.g. a flag label or a field name |
+| `User.active` | bool, default true | |
+| `ClassGrade.corrected_at`, `corrected_by` | set when the chair corrects a grade | cleared when the member resubmits |
+
+### New chair routes
+
+| Method | Endpoint | What |
+|---|---|---|
+| POST | `/members/{id}/weeks/{week_id}/mutes` | mute a flag (`kind`, `course_id`, `reason`) |
+| DELETE | `/mutes/{mute_id}` | unmute |
+| PUT | `/members/{id}/weeks/{week_id}/grades/{course_id}` | correct a grade (`percent`, `reason`) |
+| GET / POST | `/members/{id}/notes` | list / add notes |
+| PUT / DELETE | `/notes/{note_id}` | edit / delete a note |
+| PATCH | `/members/{id}` | edit name, pledge class |
+| POST | `/members/{id}/deactivate`, `/members/{id}/reactivate` | remove / bring back (`reason`) |
+| DELETE | `/members/{id}` | permanent delete (`confirm_name`, `reason`) |
+| GET | `/members/{id}/log` | change log for a member, newest first |
+
+`/members` also gets `include_inactive`, and every member row and flag says whether it is muted.
+
+### Frontend
+
+- **Member page (chair):**
+  - **Header:** Edit, Deactivate / Reactivate, and Delete (a dialog where you type the name)
+  - **Each week row:** a mute/unmute button on every flag, and "Correct" on submitted weeks
+  - **Panels:** Notes (add, edit, delete) and Change log
+- **Chair table:** a "Show inactive" checkbox, muted flags shown gray, and an "Inactive" badge
+- **Member history:** a ✎ marker on corrected grades
+
 ## API
 
 ### Auth
@@ -127,7 +220,8 @@ Members never see flags.
 | GET | `/courses?include_dropped=` | their classes this term |
 | POST | `/courses` | add a class (`code`, `name`, `credits`) |
 | DELETE | `/courses/{id}` | drop a class (kept for history) |
-| POST | `/submissions` | `week_id` + `grades: [{course_id, percent}]`. Must include every active class. Resubmitting replaces the grades but keeps the original submit time. |
+| GET | `/weeks/{id}/courses` | the classes that belong to that week (see below) |
+| POST | `/submissions` | `week_id` + `grades: [{course_id, percent}]`. Must include exactly that week's classes. Resubmitting replaces the grades but keeps the original submit time, and every changed grade is logged. |
 | GET | `/submissions/me` | their history: every week with status, GPA, change, class grades |
 
 ### Chair
@@ -163,6 +257,8 @@ scholarship-tracker/
     main.py            # app setup, auth and shared routes
     member_routes.py   # classes and submissions
     chair_routes.py    # members table, history, stats, terms, settings
+    manage_routes.py   # mutes, corrections, notes, edit, deactivate, delete, change log
+    audit.py           # writes change log rows
     tracking.py        # weeks, statuses, history, flags
     grading.py         # grade scale and gpa math
     models.py          # tables and request/response shapes
@@ -170,6 +266,8 @@ scholarship-tracker/
     auth.py            # hashing, tokens, role checks
     seed.py            # chair, term, optional sample data
     requirements.txt
+    requirements-dev.txt   # adds pytest for the tests
+    tests/             # pytest suite, runs against a throwaway database
   frontend/
     index.html  submit.html  classes.html  history.html
     chair.html  member.html  settings.html
@@ -178,9 +276,15 @@ scholarship-tracker/
   README.md
 ```
 
-## Privacy
+## Security
 
-- Passwords are hashed
+- Passwords are hashed with bcrypt. They must be 8+ characters and at most 72 bytes (bcrypt's limit).
+- Logging in with a wrong email takes as long as a wrong password, and both give the same message, so you can't tell which emails have accounts. Registering with a used email does say it's taken.
+- Tokens are signed with `SECRET_KEY` from the environment, or a random key the backend makes once and keeps in `backend/.secret_key` (git-ignored). Tokens last 24 hours.
+- Deactivated or deleted members are locked out right away, even if they still have a token
+- Sqlite foreign keys are turned on, so rows can't point at deleted data
+- Everything the frontend shows is set with `textContent`, never as HTML, so a name or note can't inject script
+- Chart.js loads with an integrity hash, so a changed CDN file won't run
 - Members agree to share grades with the chair when they register
 - Only the chair can see other members' grades. Members can't see flags.
 - The backend checks roles on every route; the frontend checks are only for navigation
@@ -189,11 +293,6 @@ scholarship-tracker/
 
 ## Future work
 
-- Chair management of members, done as the chair, not by logging in as them:
-  - excuse a missing week (e.g. illness) so it isn't flagged
-  - add a note to a member or a week
-  - change a member's pledge class, or remove someone who left the house
-  - correct a grade, with the change recorded (who, when, old value)
 - Letter grade entry and +/- scales for other schools
 - Multiple houses (House table + `house_id` on every row) and multiple schools
 - Invite links and approving new members

@@ -20,7 +20,7 @@ from models import (
     UserOut,
     WeekStat,
 )
-from tracking import FLAG_KINDS, current_term, generate_weeks, started_weeks, user_history
+from tracking import FLAG_KINDS, active_flags, current_term, generate_weeks, started_weeks, user_history
 
 router = APIRouter(tags=["chair"])
 
@@ -29,8 +29,10 @@ def load_rules(session: Session) -> list[FlagRule]:
     return list(session.exec(select(FlagRule)).all())
 
 
-def all_members(session: Session, pledge_class: Optional[str] = None) -> list[User]:
+def all_members(session: Session, pledge_class: Optional[str] = None, include_inactive: bool = False) -> list[User]:
     query = select(User).where(User.role == "member")
+    if not include_inactive:
+        query = query.where(User.active.is_(True))
     if pledge_class:
         query = query.where(User.pledge_class == pledge_class)
     return list(session.exec(query).all())
@@ -47,11 +49,17 @@ def list_terms(chair: User = Depends(require_chair), session: Session = Depends(
 def create_term(data: TermIn, chair: User = Depends(require_chair), session: Session = Depends(get_session)):
     if data.end_date <= data.start_date:
         raise HTTPException(status_code=400, detail="End date must be after the start date")
+    # a typo in the year would otherwise make thousands of weeks
+    if (data.end_date - data.start_date).days > 366:
+        raise HTTPException(status_code=400, detail="A term can't be longer than a year")
+    if not data.name.strip():
+        raise HTTPException(status_code=400, detail="Term name can't be blank")
 
     term = Term.model_validate(data)
+    term.name = term.name.strip()
     session.add(term)
-    session.commit()
-    session.refresh(term)
+    # flush gets the id, the term and its weeks are saved together below
+    session.flush()
 
     # make every week of the term up front
     for week in generate_weeks(term):
@@ -76,6 +84,7 @@ def members(
     status: Optional[Literal["on_time", "late", "missing", "open", "submitted"]] = None,
     flag: Optional[str] = None,
     sort: Literal["name", "gpa", "change"] = "name",
+    include_inactive: bool = False,
     chair: User = Depends(require_chair),
     session: Session = Depends(get_session),
 ):
@@ -99,7 +108,7 @@ def members(
     rules = load_rules(session)
 
     rows = []
-    for u in all_members(session, pledge_class):
+    for u in all_members(session, pledge_class, include_inactive):
         week = user_history(session, u, weeks, scale, rules)[-1]
         rows.append(
             MemberRow(
@@ -107,6 +116,7 @@ def members(
                 name=u.name,
                 email=u.email,
                 pledge_class=u.pledge_class,
+                active=u.active,
                 status=week.status,
                 submitted_at=week.submitted_at,
                 gpa=week.gpa,
@@ -121,10 +131,11 @@ def members(
     elif status is not None:
         rows = [r for r in rows if r.status == status]
 
+    # muted flags never count for the filters
     if flag == "any":
-        rows = [r for r in rows if r.flags]
+        rows = [r for r in rows if active_flags(r.flags)]
     elif flag:
-        rows = [r for r in rows if any(f.kind == flag for f in r.flags)]
+        rows = [r for r in rows if any(f.kind == flag for f in active_flags(r.flags))]
 
     if sort == "gpa":
         # lowest first, no gpa at the bottom
@@ -226,6 +237,8 @@ def update_grade_scale(data: list[GradeScaleIn], chair: User = Depends(require_c
     if not data:
         raise HTTPException(status_code=400, detail="The scale needs at least one row")
     letters = [row.letter.strip().upper() for row in data]
+    if "" in letters:
+        raise HTTPException(status_code=400, detail="Every row needs a letter")
     if len(letters) != len(set(letters)):
         raise HTTPException(status_code=400, detail="Each letter can only be listed once")
     if not any(row.min_percent == 0 for row in data):
@@ -235,14 +248,14 @@ def update_grade_scale(data: list[GradeScaleIn], chair: User = Depends(require_c
         raise HTTPException(status_code=400, detail="Each minimum % can only be used once")
     # a higher cutoff should never be worth fewer points
     ordered = sorted(data, key=lambda r: r.min_percent, reverse=True)
-    for higher, lower in zip(ordered, ordered[1:]):
+    for higher, lower in zip(ordered, ordered[1:], strict=False):
         if lower.points > higher.points:
             raise HTTPException(status_code=400, detail=f"{lower.letter} is worth more points than {higher.letter} but has a lower minimum")
 
     # replace the whole scale
     for row in session.exec(select(GradeScale)).all():
         session.delete(row)
-    for row, letter in zip(data, letters):
+    for row, letter in zip(data, letters, strict=True):
         session.add(GradeScale(letter=letter, min_percent=row.min_percent, points=row.points))
     session.commit()
     return load_scale(session)

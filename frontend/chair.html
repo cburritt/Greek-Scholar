@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chair Dashboard</title>
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
   <header id="header"></header>
@@ -45,6 +45,7 @@
           </select>
         </label>
       </div>
+      <label class="check"><input type="checkbox" id="f-inactive"> Show inactive members</label>
       <p class="muted" id="count"></p>
       <div class="table-wrap">
         <table>
@@ -112,6 +113,7 @@
       Object.keys(FILTERS).forEach((id) => {
         document.getElementById(id).addEventListener("change", render);
       });
+      document.getElementById("f-inactive").addEventListener("change", render);
       render();
     }
 
@@ -128,6 +130,7 @@
           select.value = value;
         }
       });
+      document.getElementById("f-inactive").checked = params.get("inactive") === "1";
     }
 
     // keep the filters in the url so back and refresh keep them
@@ -139,6 +142,9 @@
           params.set(FILTERS[id], value);
         }
       });
+      if (document.getElementById("f-inactive").checked) {
+        params.set("inactive", "1");
+      }
       history.replaceState(null, "", "chair.html?" + params.toString());
     }
 
@@ -178,6 +184,7 @@
           status: document.getElementById("f-status").value,
           flag: document.getElementById("f-flag").value,
           sort: document.getElementById("f-sort").value,
+          include_inactive: document.getElementById("f-inactive").checked,
         });
       } catch (err) {
         showMessage("message", err.message, "error");
@@ -188,8 +195,12 @@
       tbody.innerHTML = "";
       rows.forEach((r) => {
         const tr = el("tr", { class: "clickable" });
-        if (r.flags.length > 0) {
+        // muted flags don't mark the row
+        if (activeFlags(r.flags).length > 0) {
           tr.classList.add("flagged");
+        }
+        if (!r.active) {
+          tr.classList.add("inactive");
         }
         tr.addEventListener("click", () => {
           window.location.href = "member.html?id=" + r.user_id + "&from=" + encodeURIComponent(window.location.search);
@@ -197,6 +208,9 @@
 
         const name = el("td", { class: "nowrap" });
         name.appendChild(el("strong", {}, r.name));
+        if (!r.active) {
+          name.appendChild(el("span", { class: "badge status-not_member", style: "margin-left: 6px;" }, "Inactive"));
+        }
         name.appendChild(el("div", { class: "muted" }, r.pledge_class));
         tr.appendChild(name);
 
@@ -212,7 +226,11 @@
 
         const classes = el("td");
         r.classes.forEach((c) => {
-          const pill = el("span", { class: "pill" }, c.code + " " + c.percent + "%");
+          let text = c.code + " " + c.percent + "%";
+          if (c.corrected) {
+            text += " ✎";
+          }
+          const pill = el("span", { class: "pill" }, text);
           if (classBelow !== null && c.percent < classBelow) {
             pill.classList.add("low");
           }

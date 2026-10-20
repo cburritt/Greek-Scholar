@@ -45,7 +45,12 @@ async function request(method, path, body) {
   let data = null;
   const text = await res.text();
   if (text) {
-    data = JSON.parse(text);
+    // a server crash sends plain text, not json
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      data = null;
+    }
   }
 
   // expired or bad token, send them back to log in
@@ -114,6 +119,7 @@ const getGradeScale = () => request("GET", "/settings/grade-scale");
 const getCourses = (includeDropped) => request("GET", "/courses" + query({ include_dropped: includeDropped }));
 const addCourse = (code, name, credits) => request("POST", "/courses", { code, name, credits });
 const dropCourse = (id) => request("DELETE", "/courses/" + id);
+const getWeekCourses = (weekId) => request("GET", "/weeks/" + weekId + "/courses");
 const submitWeek = (weekId, grades) => request("POST", "/submissions", { week_id: weekId, grades });
 const getMyHistory = () => request("GET", "/submissions/me");
 
@@ -127,3 +133,20 @@ const getFlagRules = () => request("GET", "/settings/flags");
 const saveFlagRules = (rules) => request("PUT", "/settings/flags", rules);
 const saveGradeScale = (rows) => request("PUT", "/settings/grade-scale", rows);
 const createTerm = (term) => request("POST", "/terms", term);
+
+// chair management, always done as the chair on the member's data
+
+const muteFlag = (userId, weekId, kind, courseId, reason) =>
+  request("POST", "/members/" + userId + "/weeks/" + weekId + "/mutes", { kind, course_id: courseId, reason });
+const unmuteFlag = (muteId) => request("DELETE", "/mutes/" + muteId);
+const correctGrade = (userId, weekId, courseId, percent, reason) =>
+  request("PUT", "/members/" + userId + "/weeks/" + weekId + "/grades/" + courseId, { percent, reason });
+const getNotes = (userId) => request("GET", "/members/" + userId + "/notes");
+const addNote = (userId, text, weekId) => request("POST", "/members/" + userId + "/notes", { text, week_id: weekId });
+const editNote = (noteId, text, weekId) => request("PUT", "/notes/" + noteId, { text, week_id: weekId });
+const deleteNote = (noteId) => request("DELETE", "/notes/" + noteId);
+const editMember = (userId, changes) => request("PATCH", "/members/" + userId, changes);
+const deactivateMember = (userId, reason) => request("POST", "/members/" + userId + "/deactivate", { reason });
+const reactivateMember = (userId, reason) => request("POST", "/members/" + userId + "/reactivate", { reason });
+const deleteMember = (userId, confirmName, reason) => request("DELETE", "/members/" + userId, { confirm_name: confirmName, reason });
+const getMemberLog = (userId) => request("GET", "/members/" + userId + "/log");

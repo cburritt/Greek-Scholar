@@ -45,11 +45,24 @@ The API docs are at http://localhost:8000/docs
 | Chair | chair@test.com | chair123 |
 | Member | alex@test.com, jordan@test.com, sam@test.com, taylor@test.com, morgan@test.com, casey@test.com, riley@test.com | test123 |
 
-Jordan's grades trend down, so that account shows the most flags.
+Jordan's grades trend down, so that account shows the most flags. It also has a sample note, a corrected grade and a muted flag. Riley is deactivated, so Riley can't log in and only shows up with "Show inactive members".
+
+The demo passwords are shorter than the 8 characters new accounts need. That's fine for the demo, but change the chair password before real use: `python seed.py youremail yourpassword`.
+
+## Tests
+
+From `backend/`, with the venv active:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+The tests use their own throwaway database, so they never touch `grades.db`.
 
 ## Start over
 
-Stop the backend, delete `backend/grades.db`, and run `python seed.py --sample` again.
+Stop the backend, delete `backend/grades.db`, and run `python seed.py --sample` again. You have to do this after pulling changes that add database columns; the backend will tell you if so.
 
 ## Notes
 

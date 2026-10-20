@@ -4,7 +4,7 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from grading import calc_gpa, letter_and_points
-from models import ClassGrade, ClassResult, Course, FlagOut, FlagRule, GradeScale, Submission, Term, User, Week, WeekResult
+from models import ClassGrade, ClassResult, Course, FlagMute, FlagOut, FlagRule, GradeScale, Submission, Term, User, Week, WeekResult
 
 # kind, default threshold, on by default
 DEFAULT_FLAG_RULES = [
@@ -18,6 +18,9 @@ DEFAULT_FLAG_RULES = [
 ]
 
 FLAG_KINDS = [kind for kind, _, _ in DEFAULT_FLAG_RULES]
+
+# flags that are about one class, muted per class
+CLASS_FLAG_KINDS = {"class_below", "class_drop"}
 
 
 def current_term(session: Session) -> Optional[Term]:
@@ -114,7 +117,14 @@ def user_history(
                     continue
                 letter, points = letter_and_points(g.percent, g.letter, scale)
                 result.classes.append(
-                    ClassResult(course_id=course.id, code=course.code, credits=course.credits, percent=g.percent, letter=letter)
+                    ClassResult(
+                        course_id=course.id,
+                        code=course.code,
+                        credits=course.credits,
+                        percent=g.percent,
+                        letter=letter,
+                        corrected=g.corrected_at is not None,
+                    )
                 )
                 gpa_entries.append((course.credits, points))
             result.classes.sort(key=lambda c: c.code)
@@ -134,10 +144,26 @@ def user_history(
         previous = result
 
     if rules is not None:
+        mutes = session.exec(
+            select(FlagMute).where(FlagMute.user_id == user.id, FlagMute.week_id.in_(week_ids))
+        ).all()
+        mute_by_key = {(m.week_id, m.kind, m.course_id): m for m in mutes}
+
         for i in range(len(results)):
             results[i].flags = evaluate_flags(results, i, rules)
+            for flag in results[i].flags:
+                mute = mute_by_key.get((results[i].week_id, flag.kind, flag.course_id))
+                if mute is not None:
+                    flag.muted = True
+                    flag.mute_id = mute.id
+                    flag.mute_reason = mute.reason
 
     return results
+
+
+def active_flags(flags: list[FlagOut]) -> list[FlagOut]:
+    # muted flags stay visible on the member page but do not count anywhere else
+    return [f for f in flags if not f.muted]
 
 
 def fmt(number: float) -> str:
@@ -164,7 +190,7 @@ def evaluate_flags(history: list[WeekResult], index: int, rules: list[FlagRule])
     if rule and rule.threshold is not None:
         for c in week.classes:
             if c.percent is not None and c.percent < rule.threshold:
-                flags.append(FlagOut(kind="class_below", label=f"{c.code} below {fmt(rule.threshold)}%"))
+                flags.append(FlagOut(kind="class_below", label=f"{c.code} below {fmt(rule.threshold)}%", course_id=c.course_id))
 
     rule = on.get("gpa_drop")
     if rule and rule.threshold is not None and week.gpa_change is not None and week.gpa_change <= -rule.threshold:
@@ -174,7 +200,7 @@ def evaluate_flags(history: list[WeekResult], index: int, rules: list[FlagRule])
     if rule and rule.threshold is not None:
         for c in week.classes:
             if c.change is not None and c.change <= -rule.threshold:
-                flags.append(FlagOut(kind="class_drop", label=f"{c.code} down {fmt(abs(c.change))}%"))
+                flags.append(FlagOut(kind="class_drop", label=f"{c.code} down {fmt(abs(c.change))}%", course_id=c.course_id))
 
     rule = on.get("missed_in_row")
     if rule and rule.threshold is not None and rule.threshold > 0:
