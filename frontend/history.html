@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My History</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <header id="header"></header>
+
+  <main>
+    <div class="card">
+      <h2>My GPA by week</h2>
+      <div class="chart-box"><canvas id="gpa-chart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>Class grades by week</h2>
+      <div class="chart-box"><canvas id="class-chart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>All weeks</h2>
+      <div class="table-wrap">
+        <table>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="message" id="message"></div>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script src="charts.js"></script>
+  <script>
+    const user = requireRole("member");
+
+    async function load() {
+      const history = await getMyHistory();
+      renderGpaChart("gpa-chart", history.weeks);
+      renderClassChart("class-chart", history.weeks);
+      renderHistoryTable(history.weeks, false);
+    }
+
+    if (user) {
+      load().catch((err) => showMessage("message", err.message, "error"));
+    }
+  </script>
+</body>
+</html>

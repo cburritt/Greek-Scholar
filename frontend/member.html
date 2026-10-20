@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Member Detail</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <header id="header"></header>
+
+  <main>
+    <p><a href="chair.html" id="back-link"><button type="button" class="secondary">← Back to members</button></a></p>
+
+    <div class="banner" id="inactive-banner" hidden>
+      This member is inactive. They can't log in and don't show up in the members table or house stats.
+    </div>
+
+    <div class="card">
+      <div class="title-row">
+        <div>
+          <p class="muted">Viewing as chair · you are not logged in as this member</p>
+          <h2 id="member-name"></h2>
+          <p class="muted" id="member-info"></p>
+        </div>
+        <div class="row" id="member-actions">
+          <button type="button" class="secondary small" id="edit-btn">Edit</button>
+          <button type="button" class="secondary small" id="active-btn"></button>
+          <button type="button" class="danger small" id="delete-btn">Delete</button>
+        </div>
+      </div>
+      <div id="member-classes"></div>
+      <div class="message" id="member-message"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h3>GPA by week</h3>
+        <div class="chart-box"><canvas id="gpa-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Class grades by week</h3>
+        <div class="chart-box"><canvas id="class-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>All weeks</h3>
+      <p class="muted">Mute a flag to stop it counting in the members table. It stays here, grayed out. "Correct" fixes a grade the member already submitted.</p>
+      <div class="table-wrap">
+        <table>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="message" id="message"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h3>Notes <span class="muted">· only you can see these</span></h3>
+        <form id="note-form">
+          <label>New note <textarea id="note-text" rows="3" maxlength="2000" required></textarea></label>
+          <label>About <select id="note-week"><option value="">The member in general</option></select></label>
+          <button type="submit">Add note</button>
+          <div class="message" id="note-message"></div>
+        </form>
+        <div id="notes"></div>
+      </div>
+
+      <div class="card">
+        <h3>Change log</h3>
+        <div id="log"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script src="charts.js"></script>
+  <script>
+    const user = requireRole("chair");
+    // only a plain number is allowed, so a crafted link can't point the api calls somewhere else
+    let memberId = new URLSearchParams(window.location.search).get("id");
+    if (!/^[0-9]+$/.test(memberId || "")) {
+      memberId = null;
+    }
+    let member = null;
+    let weeks = [];
+
+    // go back to the members table with the same week and filters
+    const from = new URLSearchParams(window.location.search).get("from");
+    if (from && from.startsWith("?")) {
+      document.getElementById("back-link").href = "chair.html" + from;
+    }
+
+    // run an action, show what happened, and reload everything
+    async function act(messageId, fn) {
+      try {
+        const res = await fn();
+        let text = "Saved.";
+        if (res && res.message) {
+          text = res.message + ".";
+        }
+        await load();
+        showMessage(messageId, text, "success");
+      } catch (err) {
+        showMessage(messageId, err.message, "error");
+      }
+    }
+
+    async function load() {
+      const [history, notes, log] = await Promise.all([getMemberHistory(memberId), getNotes(memberId), getMemberLog(memberId)]);
+      member = history.user;
+      weeks = history.weeks;
+
+      document.getElementById("member-name").textContent = member.name;
+      document.getElementById("member-info").textContent = member.email + " · pledge class " + (member.pledge_class || "none");
+      document.title = member.name;
+      document.getElementById("inactive-banner").hidden = member.active;
+
+      let activeText = "Deactivate";
+      if (!member.active) {
+        activeText = "Reactivate";
+      }
+      document.getElementById("active-btn").textContent = activeText;
+
+      const box = document.getElementById("member-classes");
+      box.innerHTML = "";
+      history.courses.forEach((c) => {
+        let text = c.code + " · " + c.credits + " cr";
+        if (c.dropped_at) {
+          text += " · dropped " + formatDate(c.dropped_at);
+        }
+        box.appendChild(el("span", { class: "pill" }, text));
+      });
+
+      renderGpaChart("gpa-chart", weeks);
+      renderClassChart("class-chart", weeks);
+      renderHistoryTable(weeks, true, { onMute, onUnmute, onCorrect });
+
+      const weekSelect = document.getElementById("note-week");
+      const chosen = weekSelect.value;
+      weekSelect.innerHTML = "";
+      weekSelect.appendChild(el("option", { value: "" }, "The member in general"));
+      [...weeks].reverse().forEach((w) => weekSelect.appendChild(el("option", { value: w.week_id }, "Week " + w.number)));
+      weekSelect.value = chosen;
+
+      renderNotes(notes);
+      renderLog(log);
+    }
+
+    // flags
+
+    async function onMute(week, flag) {
+      const values = await formDialog(
+        "Mute \"" + flag.label + "\" on week " + week.number,
+        [{ name: "reason", label: "Reason", type: "textarea", required: true }],
+        "Mute flag",
+        false,
+        "The week's status doesn't change. The flag just stops counting in the members table."
+      );
+      if (!values) {
+        return;
+      }
+      act("message", () => muteFlag(memberId, week.week_id, flag.kind, flag.course_id, values.reason));
+    }
+
+    async function onUnmute(flag) {
+      act("message", () => unmuteFlag(flag.mute_id));
+    }
+
+    // grade corrections
+
+    async function onCorrect(week) {
+      const values = await formDialog(
+        "Correct a grade for week " + week.number,
+        [
+          { name: "course", label: "Class", type: "select", options: week.classes.map((c) => ({ value: c.course_id, text: c.code + " (now " + c.percent + "%)" })) },
+          { name: "percent", label: "Correct %", type: "number", min: "0", max: "120", step: "0.1", required: true },
+          { name: "reason", label: "Reason", type: "textarea", required: true },
+        ],
+        "Save correction",
+        false,
+        "The member will see that this grade was corrected, but not the reason."
+      );
+      if (!values) {
+        return;
+      }
+      act("message", () => correctGrade(memberId, week.week_id, Number(values.course), Number(values.percent), values.reason));
+    }
+
+    // notes
+
+    function renderNotes(notes) {
+      const box = document.getElementById("notes");
+      box.innerHTML = "";
+      if (notes.length === 0) {
+        box.appendChild(el("p", { class: "muted" }, "No notes yet."));
+        return;
+      }
+      notes.forEach((n) => {
+        const item = el("div", { class: "note" });
+        let meta = formatDue(n.created_at) + " · " + n.author_name;
+        if (n.week_number) {
+          meta += " · week " + n.week_number;
+        }
+        if (n.updated_at !== n.created_at) {
+          meta += " · edited";
+        }
+        item.appendChild(el("div", { class: "muted" }, meta));
+        item.appendChild(el("p", { class: "note-text" }, n.text));
+
+        const buttons = el("div", { class: "row" });
+        const edit = el("button", { type: "button", class: "link tiny" }, "edit");
+        edit.addEventListener("click", () => onEditNote(n));
+        const del = el("button", { type: "button", class: "link tiny" }, "delete");
+        del.addEventListener("click", () => {
+          if (confirm("Delete this note?")) {
+            act("note-message", () => deleteNote(n.id));
+          }
+        });
+        buttons.appendChild(edit);
+        buttons.appendChild(del);
+        item.appendChild(buttons);
+        box.appendChild(item);
+      });
+    }
+
+    async function onEditNote(note) {
+      const options = [{ value: "", text: "The member in general" }];
+      [...weeks].reverse().forEach((w) => options.push({ value: w.week_id, text: "Week " + w.number }));
+      const values = await formDialog(
+        "Edit note",
+        [
+          { name: "text", label: "Note", type: "textarea", value: note.text, required: true },
+          { name: "week", label: "About", type: "select", options, value: note.week_id || "" },
+        ],
+        "Save"
+      );
+      if (!values) {
+        return;
+      }
+      let weekId = null;
+      if (values.week) {
+        weekId = Number(values.week);
+      }
+      act("note-message", () => editNote(note.id, values.text, weekId));
+    }
+
+    document.getElementById("note-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = document.getElementById("note-text").value;
+      const week = document.getElementById("note-week").value;
+      let weekId = null;
+      if (week) {
+        weekId = Number(week);
+      }
+      await act("note-message", () => addNote(memberId, text, weekId));
+      document.getElementById("note-text").value = "";
+    });
+
+    // change log
+
+    const LOG_TEXT = {
+      correct_grade: "corrected a grade",
+      resubmit_grade: "resubmitted a grade",
+      mute_flag: "muted a flag",
+      unmute_flag: "unmuted a flag",
+      add_note: "added a note",
+      edit_note: "edited a note",
+      delete_note: "deleted a note",
+      edit_member: "edited the member",
+      deactivate: "deactivated the member",
+      reactivate: "reactivated the member",
+    };
+
+    function renderLog(rows) {
+      const box = document.getElementById("log");
+      box.innerHTML = "";
+      if (rows.length === 0) {
+        box.appendChild(el("p", { class: "muted" }, "Nothing has been changed yet."));
+        return;
+      }
+      rows.forEach((r) => {
+        const item = el("div", { class: "log-row" });
+        item.appendChild(el("div", { class: "muted" }, formatDue(r.created_at)));
+
+        let text = r.actor_name + " " + (LOG_TEXT[r.action] || r.action);
+        const parts = [];
+        // flag labels already name the class
+        if (r.course_code && !r.detail) {
+          parts.push(r.course_code);
+        }
+        if (r.week_number) {
+          parts.push("week " + r.week_number);
+        }
+        if (r.detail) {
+          parts.push(r.detail.replace("_", " "));
+        }
+        if (parts.length > 0) {
+          text += " · " + parts.join(" · ");
+        }
+        item.appendChild(el("div", {}, text));
+
+        // show "old → new" for changes, or just the text for an added or deleted note
+        if (r.old_value !== null && r.new_value !== null) {
+          item.appendChild(el("div", { class: "log-change" }, r.old_value + " → " + r.new_value));
+        } else if (r.new_value !== null) {
+          item.appendChild(el("div", { class: "note-text" }, r.new_value));
+        } else if (r.old_value !== null) {
+          item.appendChild(el("div", { class: "note-text muted" }, r.old_value));
+        }
+        if (r.reason) {
+          item.appendChild(el("div", { class: "muted" }, "Reason: " + r.reason));
+        }
+        box.appendChild(item);
+      });
+    }
+
+    // edit, deactivate, delete
+
+    document.getElementById("edit-btn").addEventListener("click", async () => {
+      const values = await formDialog(
+        "Edit " + member.name,
+        [
+          { name: "name", label: "Name", value: member.name, required: true },
+          { name: "pledge_class", label: "Pledge class", value: member.pledge_class },
+        ],
+        "Save",
+        false,
+        "Email and password belong to the member and can't be changed here."
+      );
+      if (!values) {
+        return;
+      }
+      act("member-message", () => editMember(memberId, values));
+    });
+
+    document.getElementById("active-btn").addEventListener("click", async () => {
+      let title = "Deactivate " + member.name;
+      let help = "They won't be able to log in and will be hidden from the members table and stats. Their grades are kept and you can reactivate them later.";
+      let action = deactivateMember;
+      if (!member.active) {
+        title = "Reactivate " + member.name;
+        help = "They'll be able to log in again and will show up in the members table.";
+        action = reactivateMember;
+      }
+      const values = await formDialog(title, [{ name: "reason", label: "Reason", type: "textarea", required: true }], title.split(" ")[0], false, help);
+      if (!values) {
+        return;
+      }
+      act("member-message", () => action(memberId, values.reason));
+    });
+
+    document.getElementById("delete-btn").addEventListener("click", async () => {
+      const values = await formDialog(
+        "Permanently delete " + member.name,
+        [
+          { name: "confirm", label: "Type their full name to confirm", required: true },
+          { name: "reason", label: "Reason", type: "textarea", required: true },
+        ],
+        "Delete forever",
+        true,
+        "This erases their account, classes, every grade, notes and change log. It can't be undone. To just remove them from the house, use Deactivate instead."
+      );
+      if (!values) {
+        return;
+      }
+      try {
+        await deleteMember(memberId, values.confirm, values.reason);
+        window.location.href = document.getElementById("back-link").getAttribute("href");
+      } catch (err) {
+        showMessage("member-message", err.message, "error");
+      }
+    });
+
+    if (user && memberId === null) {
+      showMessage("message", "No member picked. Go back to the members table.", "error");
+    } else if (user) {
+      load().catch((err) => showMessage("message", err.message, "error"));
+    }
+  </script>
+</body>
+</html>

@@ -5,137 +5,243 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chair Dashboard</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
-  <header>
-    <h1>Greek Scholar</h1>
-    <div>
-      <span class="muted" id="who"></span>
-      <button class="link" id="logout-btn" type="button">Log out</button>
-    </div>
-  </header>
+  <header id="header"></header>
 
   <main>
+    <div class="banner" id="no-term" hidden>
+      No term is set up yet. Go to <a href="settings.html">Settings</a> to create one.
+    </div>
+
+    <div class="card">
+      <h2>House trend <span class="muted" id="term-name"></span></h2>
+      <div class="stats" id="week-stats"></div>
+      <div class="chart-box"><canvas id="house-chart"></canvas></div>
+    </div>
+
     <div class="card">
       <h2>Members</h2>
       <div class="filters">
-        <label>Term <select id="f-term"></select></label>
-        <label>Pledge class <select id="f-pledge"></select></label>
-        <label>GPA at or below <input type="number" id="f-max-gpa" min="0" max="4" step="0.1" placeholder="any"></label>
+        <label>Week <select id="f-week"></select></label>
+        <label>Pledge class <select id="f-pledge"><option value="">All</option></select></label>
         <label>Status
-          <select id="f-submitted">
+          <select id="f-status">
             <option value="">All</option>
-            <option value="yes">Submitted</option>
-            <option value="no">Missing</option>
+            <option value="submitted">Submitted</option>
+            <option value="on_time">On time</option>
+            <option value="late">Late</option>
+            <option value="missing">Missing</option>
+            <option value="open">Not due yet</option>
           </select>
         </label>
+        <label>Flag <select id="f-flag"><option value="">All</option><option value="any">Any flag</option></select></label>
         <label>Sort by
           <select id="f-sort">
             <option value="name">Name</option>
             <option value="gpa">GPA (lowest first)</option>
+            <option value="change">Biggest drop first</option>
           </select>
         </label>
       </div>
+      <label class="check"><input type="checkbox" id="f-inactive"> Show inactive members</label>
       <p class="muted" id="count"></p>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Name</th>
-              <th>Pledge class</th>
-              <th>Term</th>
+              <th>Status</th>
               <th>GPA</th>
-              <th>Credit hours</th>
-              <th>Submitted</th>
+              <th>Change</th>
+              <th>Classes</th>
+              <th>Flags</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
-      <p class="muted">Rows in red are below a 2.5 GPA.</p>
+      <p class="muted">Click a member to see their weeks. Change flag rules in Settings.</p>
+      <div class="message" id="message"></div>
     </div>
   </main>
 
   <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script src="charts.js"></script>
   <script>
-    const LOW_GPA = 2.5;
+    const user = requireRole("chair");
 
-    const user = currentUser();
-    if (!user) {
-      window.location.href = "index.html";
-    } else if (user.role !== "chair") {
-      window.location.href = "submit.html";
-    } else {
-      document.getElementById("who").textContent = user.name;
-      setupFilters();
+    let stats = [];
+    let classBelow = null;
+
+    async function setup() {
+      const term = await getCurrentTerm();
+      if (!term) {
+        document.getElementById("no-term").hidden = false;
+        return;
+      }
+      document.getElementById("term-name").textContent = "· " + term.name;
+
+      const [weeks, pledges, rules, weekStats] = await Promise.all([getWeeks(), getPledgeClasses(), getFlagRules(), getWeeklyStats()]);
+      stats = weekStats;
+
+      // used to outline low class grades in the table
+      const rule = rules.find((r) => r.kind === "class_below" && r.enabled);
+      if (rule) {
+        classBelow = rule.threshold;
+      }
+
+      const weekSelect = document.getElementById("f-week");
+      weeks.forEach((w) => weekSelect.appendChild(el("option", { value: w.id }, weekLabel(w))));
+      // start on the newest week that is already due
+      const due = weeks.find((w) => new Date(w.due_at) < new Date());
+      if (due) {
+        weekSelect.value = due.id;
+      }
+
+      const pledgeSelect = document.getElementById("f-pledge");
+      pledges.forEach((p) => pledgeSelect.appendChild(el("option", { value: p }, p)));
+
+      const flagSelect = document.getElementById("f-flag");
+      rules.forEach((r) => flagSelect.appendChild(el("option", { value: r.kind }, FLAG_LABELS[r.kind])));
+
+      renderHouseChart("house-chart", stats);
+
+      restoreFilters();
+      Object.keys(FILTERS).forEach((id) => {
+        document.getElementById(id).addEventListener("change", render);
+      });
+      document.getElementById("f-inactive").addEventListener("change", render);
       render();
     }
 
-    document.getElementById("logout-btn").addEventListener("click", () => {
-      logout();
-      window.location.href = "index.html";
-    });
+    // filter box id -> name in the page url
+    const FILTERS = { "f-week": "week", "f-pledge": "pledge", "f-status": "status", "f-flag": "flag", "f-sort": "sort" };
 
-    function addOption(select, value, text) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = text;
-      select.appendChild(opt);
-    }
-
-    function setupFilters() {
-      // always offer the current term even before anyone submits
-      const terms = [...new Set(["Fall 2026", ...getTerms()])].sort(compareTerms);
-      const termSelect = document.getElementById("f-term");
-      terms.forEach((t) => addOption(termSelect, t, t));
-
-      const pledgeSelect = document.getElementById("f-pledge");
-      addOption(pledgeSelect, "", "All");
-      getPledgeClasses().forEach((p) => addOption(pledgeSelect, p, p));
-
-      ["f-term", "f-pledge", "f-max-gpa", "f-submitted", "f-sort"].forEach((id) => {
-        document.getElementById(id).addEventListener("input", render);
+    // coming back from a member page puts the filters back how they were
+    function restoreFilters() {
+      const params = new URLSearchParams(window.location.search);
+      Object.keys(FILTERS).forEach((id) => {
+        const value = params.get(FILTERS[id]);
+        const select = document.getElementById(id);
+        if (value !== null && [...select.options].some((o) => o.value === value)) {
+          select.value = value;
+        }
       });
+      document.getElementById("f-inactive").checked = params.get("inactive") === "1";
     }
 
-    function addCell(tr, text, className) {
-      const td = document.createElement("td");
-      td.textContent = text;
-      if (className) {
-        td.className = className;
+    // keep the filters in the url so back and refresh keep them
+    function saveFilters() {
+      const params = new URLSearchParams();
+      Object.keys(FILTERS).forEach((id) => {
+        const value = document.getElementById(id).value;
+        if (value) {
+          params.set(FILTERS[id], value);
+        }
+      });
+      if (document.getElementById("f-inactive").checked) {
+        params.set("inactive", "1");
       }
-      tr.appendChild(td);
+      history.replaceState(null, "", "chair.html?" + params.toString());
     }
 
-    function render() {
-      const rows = getMembers({
-        term: document.getElementById("f-term").value,
-        pledgeClass: document.getElementById("f-pledge").value,
-        maxGpa: document.getElementById("f-max-gpa").value,
-        submitted: document.getElementById("f-submitted").value,
-        sort: document.getElementById("f-sort").value,
+    function renderWeekStats(weekId) {
+      const box = document.getElementById("week-stats");
+      box.innerHTML = "";
+      const s = stats.find((x) => x.week_id === weekId);
+      if (!s) {
+        return;
+      }
+      const notYet = s.expected - s.on_time - s.late - s.missing;
+      const items = [
+        ["Avg GPA", formatGpa(s.avg_gpa)],
+        ["On time", s.on_time],
+        ["Late", s.late],
+        ["Missing", s.missing],
+        ["Not in yet", notYet],
+      ];
+      items.forEach(([label, value]) => {
+        const stat = el("div", { class: "stat" });
+        stat.appendChild(el("div", { class: "num" }, value));
+        stat.appendChild(el("div", { class: "label" }, label + " · week " + s.number));
+        box.appendChild(stat);
       });
+    }
+
+    async function render() {
+      const weekId = Number(document.getElementById("f-week").value);
+      renderWeekStats(weekId);
+      saveFilters();
+
+      let rows;
+      try {
+        rows = await getMembers({
+          week_id: weekId,
+          pledge_class: document.getElementById("f-pledge").value,
+          status: document.getElementById("f-status").value,
+          flag: document.getElementById("f-flag").value,
+          sort: document.getElementById("f-sort").value,
+          include_inactive: document.getElementById("f-inactive").checked,
+        });
+      } catch (err) {
+        showMessage("message", err.message, "error");
+        return;
+      }
 
       const tbody = document.getElementById("rows");
       tbody.innerHTML = "";
-
       rows.forEach((r) => {
-        const tr = document.createElement("tr");
-        addCell(tr, r.name);
-        addCell(tr, r.pledgeClass);
-        addCell(tr, r.term);
-        if (r.gpa === null) {
-          addCell(tr, "not submitted", "missing");
-          addCell(tr, "");
-          addCell(tr, "");
-        } else {
-          if (r.gpa < LOW_GPA) {
-            tr.className = "low";
-          }
-          addCell(tr, r.gpa.toFixed(2));
-          addCell(tr, r.creditHours);
-          addCell(tr, new Date(r.submittedAt).toLocaleDateString());
+        const tr = el("tr", { class: "clickable" });
+        // muted flags don't mark the row
+        if (activeFlags(r.flags).length > 0) {
+          tr.classList.add("flagged");
         }
+        if (!r.active) {
+          tr.classList.add("inactive");
+        }
+        tr.addEventListener("click", () => {
+          window.location.href = "member.html?id=" + r.user_id + "&from=" + encodeURIComponent(window.location.search);
+        });
+
+        const name = el("td", { class: "nowrap" });
+        name.appendChild(el("strong", {}, r.name));
+        if (!r.active) {
+          name.appendChild(el("span", { class: "badge status-not_member", style: "margin-left: 6px;" }, "Inactive"));
+        }
+        name.appendChild(el("div", { class: "muted" }, r.pledge_class));
+        tr.appendChild(name);
+
+        const status = el("td");
+        status.appendChild(statusBadge(r.status));
+        tr.appendChild(status);
+
+        tr.appendChild(el("td", {}, formatGpa(r.gpa)));
+
+        const change = el("td", { class: "nowrap" });
+        change.appendChild(changeCell(r.gpa_change, 2, ""));
+        tr.appendChild(change);
+
+        const classes = el("td");
+        r.classes.forEach((c) => {
+          let text = c.code + " " + c.percent + "%";
+          if (c.corrected) {
+            text += " ✎";
+          }
+          const pill = el("span", { class: "pill" }, text);
+          if (classBelow !== null && c.percent < classBelow) {
+            pill.classList.add("low");
+          }
+          classes.appendChild(pill);
+        });
+        tr.appendChild(classes);
+
+        const flags = el("td");
+        r.flags.forEach((f) => flags.appendChild(flagBadge(f)));
+        tr.appendChild(flags);
+
         tbody.appendChild(tr);
       });
 
@@ -144,6 +250,10 @@
         label = "1 member";
       }
       document.getElementById("count").textContent = label;
+    }
+
+    if (user) {
+      setup().catch((err) => showMessage("message", err.message, "error"));
     }
   </script>
 </body>

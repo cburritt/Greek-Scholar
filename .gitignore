@@ -4,3 +4,5 @@ __pycache__/
 venv/
 *.db
 .env
+.secret_key
+.pytest_cache/

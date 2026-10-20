@@ -1,15 +1,20 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Literal, Optional
+from datetime import datetime
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
-from auth import create_token, get_current_user, hash_password, require_chair, require_member, verify_password
+import chair_routes
+import manage_routes
+import member_routes
+from auth import DUMMY_HASH, create_token, get_current_user, hash_password, verify_password
 from database import create_db, get_session
-from models import GradeIn, GradeSubmission, MemberRow, RegisterIn, TokenOut, User, UserOut
+from grading import load_scale
+from models import GradeScale, HouseSettings, RegisterIn, Submission, Term, TokenOut, User, UserOut, WeekOut
+from tracking import current_term, started_weeks, week_status
 
 
 @asynccontextmanager
@@ -28,25 +33,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(member_routes.router)
+app.include_router(chair_routes.router)
+app.include_router(manage_routes.router)
+
 
 def token_for(user: User) -> TokenOut:
     return TokenOut(access_token=create_token(user.id), user=UserOut.model_validate(user))
 
 
-@app.post("/register", response_model=TokenOut)
+# auth
+
+@app.post("/register", response_model=TokenOut, tags=["auth"])
 def register(data: RegisterIn, session: Session = Depends(get_session)):
     email = data.email.strip().lower()
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name can't be blank")
     existing = session.exec(select(User).where(User.email == email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="An account with that email already exists")
 
     # everyone who registers is a member
     user = User(
-        name=data.name.strip(),
+        name=name,
         email=email,
         password_hash=hash_password(data.password),
         role="member",
-        pledge_class=data.pledge_class,
+        pledge_class=data.pledge_class.strip(),
     )
     session.add(user)
     session.commit()
@@ -54,81 +68,64 @@ def register(data: RegisterIn, session: Session = Depends(get_session)):
     return token_for(user)
 
 
-@app.post("/login", response_model=TokenOut)
+@app.post("/login", response_model=TokenOut, tags=["auth"])
 def login(form: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
     # the form calls it username but it is the email
     email = form.username.strip().lower()
     user = session.exec(select(User).where(User.email == email)).first()
-    if not user or not verify_password(form.password, user.password_hash):
+    if user is None:
+        # still check a password so a wrong email takes as long as a wrong password
+        verify_password(form.password, DUMMY_HASH)
         raise HTTPException(status_code=401, detail="Wrong email or password")
+    if not verify_password(form.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Wrong email or password")
+    if not user.active:
+        raise HTTPException(status_code=403, detail="This account has been deactivated. Talk to your scholarship chair.")
     return token_for(user)
 
 
-@app.get("/me", response_model=UserOut)
+@app.get("/me", response_model=UserOut, tags=["auth"])
 def me(user: User = Depends(get_current_user)):
     return user
 
 
-@app.post("/grades")
-def submit_grade(data: GradeIn, user: User = Depends(require_member), session: Session = Depends(get_session)):
-    term = data.term.strip()
-    grade = session.exec(
-        select(GradeSubmission).where(GradeSubmission.user_id == user.id, GradeSubmission.term == term)
-    ).first()
+# shared
 
-    # resubmitting for the same term replaces the old one
-    if grade is None:
-        grade = GradeSubmission(user_id=user.id, term=term, gpa=data.gpa, credit_hours=data.credit_hours)
-    else:
-        grade.gpa = data.gpa
-        grade.credit_hours = data.credit_hours
-        grade.submitted_at = datetime.now(timezone.utc)
-
-    session.add(grade)
-    session.commit()
-    return {"message": f"Grades submitted for {term}"}
+@app.get("/terms/current", response_model=Optional[Term], tags=["shared"])
+def get_current_term(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    return current_term(session)
 
 
-@app.get("/members", response_model=list[MemberRow])
-def members(
-    term: str,
-    pledge_class: Optional[str] = None,
-    max_gpa: Optional[float] = None,
-    submitted: Optional[bool] = None,
-    sort: Literal["name", "gpa"] = "name",
-    chair: User = Depends(require_chair),
-    session: Session = Depends(get_session),
-):
-    query = select(User).where(User.role == "member")
-    if pledge_class:
-        query = query.where(User.pledge_class == pledge_class)
-    users = session.exec(query).all()
+@app.get("/weeks", response_model=list[WeekOut], tags=["shared"])
+def get_weeks(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    # weeks of the current term that have started, newest first
+    term = current_term(session)
+    if term is None:
+        return []
+    weeks = started_weeks(session, term)
 
-    grades = session.exec(select(GradeSubmission).where(GradeSubmission.term == term)).all()
-    grades_by_user = {g.user_id: g for g in grades}
+    subs = {}
+    if user.role == "member":
+        rows = session.exec(
+            select(Submission).where(Submission.user_id == user.id, Submission.week_id.in_([w.id for w in weeks]))
+        ).all()
+        subs = {s.week_id: s for s in rows}
 
-    # one row per member, blank grades if they have not submitted
-    rows = []
-    for u in users:
-        row = MemberRow(name=u.name, email=u.email, pledge_class=u.pledge_class, term=term)
-        grade = grades_by_user.get(u.id)
-        if grade:
-            row.gpa = grade.gpa
-            row.credit_hours = grade.credit_hours
-            row.submitted_at = grade.submitted_at
-        rows.append(row)
+    now = datetime.now()
+    out = []
+    for w in reversed(weeks):
+        item = WeekOut(id=w.id, number=w.number, start_date=w.start_date, due_at=w.due_at)
+        if user.role == "member":
+            item.status = week_status(w, subs.get(w.id), user, now)
+        out.append(item)
+    return out
 
-    if submitted is True:
-        rows = [r for r in rows if r.gpa is not None]
-    if submitted is False:
-        rows = [r for r in rows if r.gpa is None]
-    if max_gpa is not None:
-        rows = [r for r in rows if r.gpa is not None and r.gpa <= max_gpa]
 
-    if sort == "gpa":
-        # lowest gpa first, missing ones at the bottom
-        rows.sort(key=lambda r: (r.gpa is None, r.gpa or 0))
-    else:
-        rows.sort(key=lambda r: r.name.lower())
+@app.get("/settings/grade-scale", response_model=list[GradeScale], tags=["shared"])
+def get_grade_scale(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    return load_scale(session)
 
-    return rows
+
+@app.get("/settings/house", response_model=HouseSettings, tags=["shared"])
+def get_house_settings(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    return session.exec(select(HouseSettings)).first()

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Classes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="header"></header>
+
+  <main class="narrow">
+    <div class="card">
+      <h2>My classes <span class="muted" id="term-name"></span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Class</th><th>Credits</th><th></th></tr>
+          </thead>
+          <tbody id="active-rows"></tbody>
+        </table>
+      </div>
+      <p class="muted" id="empty-note"></p>
+      <div class="message" id="list-message"></div>
+    </div>
+
+    <form class="card" id="add-form">
+      <h3>Add a class</h3>
+      <div class="row">
+        <label>Course code <input type="text" id="code" placeholder="CIS 501" required></label>
+        <label>Name (optional) <input type="text" id="name" placeholder="Software Architecture"></label>
+        <label style="max-width: 90px;">Credits <input type="number" id="credits" min="1" max="12" step="1" value="3" required></label>
+      </div>
+      <button type="submit">Add class</button>
+      <div class="message" id="add-message"></div>
+    </form>
+
+    <div class="card" id="dropped-card" hidden>
+      <h3>Dropped</h3>
+      <p class="muted">Dropped classes stay on your past weeks but don't show up on new submissions.</p>
+      <div id="dropped-list"></div>
+    </div>
+  </main>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const user = requireRole("member");
+
+    async function load() {
+      const term = await getCurrentTerm();
+      if (!term) {
+        document.getElementById("empty-note").textContent = "Your chair hasn't set up a term yet.";
+        document.getElementById("add-form").hidden = true;
+        return;
+      }
+      document.getElementById("term-name").textContent = "· " + term.name;
+
+      const courses = await getCourses(true);
+      const active = courses.filter((c) => !c.dropped_at);
+      const dropped = courses.filter((c) => c.dropped_at);
+
+      const tbody = document.getElementById("active-rows");
+      tbody.innerHTML = "";
+      active.forEach((c) => {
+        const tr = el("tr");
+        const name = el("td");
+        name.appendChild(el("strong", {}, c.code));
+        if (c.name) {
+          name.appendChild(el("span", { class: "muted" }, " " + c.name));
+        }
+        tr.appendChild(name);
+        tr.appendChild(el("td", {}, c.credits));
+        const actions = el("td", { style: "text-align: right;" });
+        const btn = el("button", { class: "secondary small", type: "button" }, "Drop");
+        btn.addEventListener("click", () => drop(c));
+        actions.appendChild(btn);
+        tr.appendChild(actions);
+        tbody.appendChild(tr);
+      });
+
+      let note = "";
+      if (active.length === 0) {
+        note = "Add every class you're taking this term, then go submit your grades.";
+      }
+      document.getElementById("empty-note").textContent = note;
+
+      document.getElementById("dropped-card").hidden = dropped.length === 0;
+      const list = document.getElementById("dropped-list");
+      list.innerHTML = "";
+      dropped.forEach((c) => {
+        list.appendChild(el("span", { class: "pill" }, c.code + " · dropped " + formatDate(c.dropped_at)));
+      });
+    }
+
+    async function drop(course) {
+      if (!confirm("Drop " + course.code + "? Your past grades for it are kept.")) {
+        return;
+      }
+      try {
+        await dropCourse(course.id);
+        showMessage("list-message", "Dropped " + course.code + ".", "success");
+        load();
+      } catch (err) {
+        showMessage("list-message", err.message, "error");
+      }
+    }
+
+    document.getElementById("add-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const c = await addCourse(
+          document.getElementById("code").value,
+          document.getElementById("name").value,
+          Number(document.getElementById("credits").value)
+        );
+        showMessage("add-message", "Added " + c.code + ".", "success");
+        document.getElementById("code").value = "";
+        document.getElementById("name").value = "";
+        load();
+      } catch (err) {
+        showMessage("add-message", err.message, "error");
+      }
+    });
+
+    if (user) {
+      load().catch((err) => showMessage("list-message", err.message, "error"));
+    }
+  </script>
+</body>
+</html>
