@@ -1,4 +1,13 @@
-from conftest import PASSWORD, add_course, count, register, submit, user_exists, weeks_oldest_first
+from conftest import (
+    PASSWORD,
+    add_course,
+    count,
+    register,
+    submit,
+    user_exists,
+    weeks_oldest_first,
+)
+
 from models import AuditLog, ClassGrade, Course, FlagMute, Note, Submission
 
 

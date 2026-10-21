@@ -208,6 +208,9 @@
 
         const name = el("td", { class: "nowrap" });
         name.appendChild(el("strong", {}, r.name));
+        if (r.screenshot_id) {
+          name.appendChild(el("span", { class: "shot-mark", title: "Canvas screenshot attached" }, " 📷"));
+        }
         if (!r.active) {
           name.appendChild(el("span", { class: "badge status-not_member", style: "margin-left: 6px;" }, "Inactive"));
         }

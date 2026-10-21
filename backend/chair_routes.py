@@ -20,7 +20,14 @@ from models import (
     UserOut,
     WeekStat,
 )
-from tracking import FLAG_KINDS, active_flags, current_term, generate_weeks, started_weeks, user_history
+from tracking import (
+    FLAG_KINDS,
+    active_flags,
+    current_term,
+    generate_weeks,
+    started_weeks,
+    user_history,
+)
 
 router = APIRouter(tags=["chair"])
 
@@ -123,6 +130,7 @@ def members(
                 gpa_change=week.gpa_change,
                 classes=week.classes,
                 flags=week.flags,
+                screenshot_id=week.screenshot_id,
             )
         )
 

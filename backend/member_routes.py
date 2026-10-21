@@ -1,13 +1,28 @@
+import json
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from audit import fmt_percent, log
 from auth import require_member
 from database import get_session
 from grading import load_scale
-from models import ClassGrade, Course, CourseIn, HistoryOut, Submission, SubmissionIn, User, UserOut, Week
+from models import (
+    ClassGrade,
+    Course,
+    CourseIn,
+    HistoryOut,
+    Screenshot,
+    Submission,
+    SubmissionIn,
+    User,
+    UserOut,
+    Week,
+)
+from screenshots import MAX_BYTES, ImageError, clean_image, delete_file, save_file
 from tracking import current_term, started_weeks, user_history
 
 router = APIRouter(tags=["member"])
@@ -88,8 +103,26 @@ def week_courses(week_id: int, user: User = Depends(require_member), session: Se
     return sorted(classes_for_week(session, user, term.id, week), key=lambda c: c.code)
 
 
+def parse_submission(week_id: int, grades: str) -> SubmissionIn:
+    # the grades come in as a json string because the request is a form with a file in it
+    try:
+        return SubmissionIn.model_validate({"week_id": week_id, "grades": json.loads(grades)})
+    except json.JSONDecodeError:
+        raise RequestValidationError([{"loc": ("body", "grades"), "msg": "grades must be json", "type": "value_error"}]) from None
+    except ValidationError as err:
+        raise RequestValidationError(err.errors()) from None
+
+
 @router.post("/submissions")
-def submit_week(data: SubmissionIn, user: User = Depends(require_member), session: Session = Depends(get_session)):
+def submit_week(
+    week_id: int = Form(...),
+    grades: str = Form(...),
+    screenshot: UploadFile = File(...),
+    user: User = Depends(require_member),
+    session: Session = Depends(get_session),
+):
+    # grades and a canvas screenshot always come together, both are saved or neither is
+    data = parse_submission(week_id, grades)
     term = require_term(session)
 
     week = session.get(Week, data.week_id)
@@ -110,10 +143,38 @@ def submit_week(data: SubmissionIn, user: User = Depends(require_member), sessio
     if set(sent_ids) != active_ids:
         raise HTTPException(status_code=400, detail="Enter a grade for every one of your classes")
 
+    # check the image before touching the database, reading one byte past the limit to catch big files
+    try:
+        image, content_type, ext = clean_image(screenshot.file.read(MAX_BYTES + 1))
+    except ImageError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from None
+
     sub = session.exec(
         select(Submission).where(Submission.user_id == user.id, Submission.week_id == week.id)
     ).first()
 
+    new_file = save_file(image, ext)
+    try:
+        sub, old_file = save_submission(session, user, week, sub, data, new_file, content_type, len(image))
+    except Exception:
+        # nothing was saved, so the new image would be left with nothing pointing at it
+        session.rollback()
+        delete_file(new_file)
+        raise
+
+    # only after the save worked is the old image safe to remove
+    if old_file:
+        delete_file(old_file)
+
+    late = sub.submitted_at > week.due_at
+    message = f"Grades submitted for week {week.number}"
+    if late:
+        message += " (late)"
+    return {"message": message, "late": late}
+
+
+def save_submission(session, user, week, sub, data, file_name, content_type, size):
+    # writes the grades and screenshot in one commit, returns the submission and the replaced image file if any
     # resubmitting replaces the grades but keeps the first submit time for late
     old_percent = {}
     if sub is None:
@@ -148,13 +209,22 @@ def submit_week(data: SubmissionIn, user: User = Depends(require_member), sessio
 
     for g in data.grades:
         session.add(ClassGrade(submission_id=sub.id, course_id=g.course_id, percent=g.percent))
-    session.commit()
 
-    late = sub.submitted_at > week.due_at
-    message = f"Grades submitted for week {week.number}"
-    if late:
-        message += " (late)"
-    return {"message": message, "late": late}
+    # one screenshot per week, a new one replaces the old
+    old_file = None
+    shot = session.exec(select(Screenshot).where(Screenshot.submission_id == sub.id)).first()
+    if shot is None:
+        shot = Screenshot(submission_id=sub.id, file_name=file_name, content_type=content_type, size=size)
+    else:
+        old_file = shot.file_name
+        shot.file_name = file_name
+        shot.content_type = content_type
+        shot.size = size
+        shot.uploaded_at = datetime.now()
+    session.add(shot)
+
+    session.commit()
+    return sub, old_file
 
 
 @router.get("/submissions/me", response_model=HistoryOut)

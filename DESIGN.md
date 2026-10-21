@@ -48,6 +48,7 @@ There is one chair, created by the seed script. Everyone who registers is a memb
 | **FlagMute** | user_id, week_id, kind, course_id, label, reason, muted_by, created_at | see Chair management |
 | **Note** | user_id, week_id, author_id, text, created_at, updated_at | chair only |
 | **AuditLog** | actor_id, action, target_user_id, week_id, course_id, detail, old_value, new_value, reason, created_at | the change log |
+| **Screenshot** | submission_id (unique), file_name, content_type, size, uploaded_at | the Canvas screenshot for a week. The file is in `backend/uploads/`. |
 | **GradeScale** | letter, min_percent, points | editable by the chair |
 | **FlagRule** | kind, threshold, enabled | editable by the chair |
 | **HouseSettings** | grade_entry | `percent` for now, `letter` later |
@@ -213,6 +214,7 @@ Every management action, plus every member resubmit that changes a grade, adds a
 | GET | `/weeks` | started weeks of the current term, newest first. Members also get their status for each week. |
 | GET | `/settings/grade-scale` | the grading scale |
 | GET | `/settings/house` | house settings (grade entry mode) |
+| GET | `/screenshots/{id}` | the image, only for the member who sent it or the chair |
 
 ### Member
 | Method | Endpoint | Description |
@@ -221,7 +223,7 @@ Every management action, plus every member resubmit that changes a grade, adds a
 | POST | `/courses` | add a class (`code`, `name`, `credits`) |
 | DELETE | `/courses/{id}` | drop a class (kept for history) |
 | GET | `/weeks/{id}/courses` | the classes that belong to that week (see below) |
-| POST | `/submissions` | `week_id` + `grades: [{course_id, percent}]`. Must include exactly that week's classes. Resubmitting replaces the grades but keeps the original submit time, and every changed grade is logged. |
+| POST | `/submissions` | a form with `week_id`, `grades` (JSON: `[{course_id, percent}]`) and `screenshot` (image file), all required. Must include exactly that week's classes. Grades and screenshot are saved together or not at all. Resubmitting needs a new screenshot, replaces the grades and the old image, keeps the original submit time, and logs every changed grade. |
 | GET | `/submissions/me` | their history: every week with status, GPA, change, class grades |
 
 ### Chair
@@ -240,11 +242,11 @@ Every management action, plus every member resubmit that changes a grade, adds a
 | Page | Who | What |
 |---|---|---|
 | `index.html` | anyone | log in / create account (new members go to My classes) |
-| `submit.html` | member | pick a week (defaults to the oldest missing one), enter % per class with a live letter + GPA preview. Shows a banner for missed weeks. |
+| `submit.html` | member | pick a week (defaults to the oldest missing one), enter % per class with a live letter + GPA preview, and attach a required Canvas screenshot (file or paste). Shows a banner for missed weeks and the screenshot already sent for that week. |
 | `classes.html` | member | add / drop classes, see dropped ones |
 | `history.html` | member | GPA chart, class grade chart, week-by-week table |
-| `chair.html` | chair | house trend chart + stats for the week, members table with filters. Opens on the newest week that is already due. |
-| `member.html` | chair | one member's charts and week table with flags |
+| `chair.html` | chair | house trend chart + stats for the week, members table with filters and a 📷 next to members who attached a screenshot. Opens on the newest week that is already due. |
+| `member.html` | chair | one member's charts, week table with flags, 📷 to view each week's Canvas screenshot, and the management tools |
 | `settings.html` | chair | flag rules, grading scale, create a term |
 
 `api.js` has every call to the backend, `app.js` has shared helpers (header, badges, formatting), and `charts.js` has the charts and history table.
@@ -259,6 +261,7 @@ scholarship-tracker/
     chair_routes.py    # members table, history, stats, terms, settings
     manage_routes.py   # mutes, corrections, notes, edit, deactivate, delete, change log
     audit.py           # writes change log rows
+    screenshots.py     # canvas screenshot checks, storage and the image route
     tracking.py        # weeks, statuses, history, flags
     grading.py         # grade scale and gpa math
     models.py          # tables and request/response shapes
@@ -267,11 +270,13 @@ scholarship-tracker/
     seed.py            # chair, term, optional sample data
     requirements.txt
     requirements-dev.txt   # adds pytest for the tests
-    tests/             # pytest suite, runs against a throwaway database
+    tests/             # pytest suite, runs against a throwaway database and uploads folder
+    uploads/           # screenshot files (git-ignored)
   frontend/
     index.html  submit.html  classes.html  history.html
     chair.html  member.html  settings.html
     api.js  app.js  charts.js  style.css
+  serve_frontend.py    # local frontend server that turns off browser caching
   DESIGN.md
   README.md
 ```
@@ -285,11 +290,93 @@ scholarship-tracker/
 - Sqlite foreign keys are turned on, so rows can't point at deleted data
 - Everything the frontend shows is set with `textContent`, never as HTML, so a name or note can't inject script
 - Chart.js loads with an integrity hash, so a changed CDN file won't run
-- Members agree to share grades with the chair when they register
+- Members agree to share grades and Canvas screenshots with the chair when they register
+- Screenshots are checked by opening them as images, re-saved to strip hidden data, stored under random names, and only served to their owner and the chair with headers that stop the browser treating them as anything but an image
 - Only the chair can see other members' grades. Members can't see flags.
 - The backend checks roles on every route; the frontend checks are only for navigation
 - **The chair never logs in as a member.** There is no impersonation or "log in as" feature, and there shouldn't be. The chair sees member data only through chair routes (`/members`, `/members/{id}/history`) using the chair's own token. Any future chair management actions (see below) also go through chair routes and act *on* the member, never *as* them.
 - Each browser tab keeps its own login (`sessionStorage`), so logging into a different account in another tab never changes who the current tab is logged in as. Closing the tab logs out.
+
+## Canvas screenshots
+
+### What's built (MVP)
+
+Every time a member submits or updates a week, they must include a screenshot of their Canvas grades. The chair can open it from that member's page if they want to check it themselves. That's all:
+- no processing or reading of the image
+- no verify buttons or verification status
+- no new flags or settings
+
+**Member, on the submit page:**
+- A **required** "Canvas screenshot" file picker under the grade boxes, also accepting paste from the clipboard. The Submit button stays disabled until there's an image.
+- **Updating a week also needs a new screenshot**, since the old one wouldn't match the changed grades. The new one replaces the old one.
+- The current screenshot for that week shows as a small thumbnail so the member can see what they sent. There's no remove button, because a submitted week always has one.
+- A short reminder to crop out student IDs and anything that isn't grades
+- **Grades and screenshot are sent together in one request.** The backend saves both or neither, so grades can never be saved without a screenshot.
+
+Chair grade corrections don't need a screenshot. Weeks submitted before this feature was added simply have none.
+
+**Chair, on the member page:**
+- A 📷 button on any week that has a screenshot
+- Clicking it opens the image in a popup, next to that week's typed grades
+- On the members table, a small 📷 next to members who attached one that week, so the chair can see at a glance
+
+### Data
+
+| Table | Fields | Notes |
+|---|---|---|
+| **Screenshot** (new) | id, submission_id (unique), file_name, content_type, size, uploaded_at | one per submission. The image file is on disk in `backend/uploads/`, not in the database. |
+
+`WeekResult` and `MemberRow` get a `screenshot_id` (or null) so the pages know when to show 📷.
+
+### Routes
+
+| Method | Endpoint | Who | What |
+|---|---|---|---|
+| POST | `/submissions` | member | **changed:** now a multipart form with the grades (as JSON) **and** the screenshot file, both required. It is rejected without a valid image. |
+| GET | `/screenshots/{id}` | that member or the chair | the image |
+
+### Keeping it safe (still needed for the MVP)
+
+- **Checks:** only PNG, JPEG or WebP, checked by opening the image (not by trusting the file extension), 5 MB max. Requests over 6 MB are refused before the server reads them.
+- **Re-encoding:** each image is re-saved with Pillow, which strips hidden data like location and EXIF
+- **Storage:** files are saved under a random name in `backend/uploads/`, which is git-ignored and never served directly
+- **Access:** only the member who uploaded it and the chair can open it. The page loads it with the login token, so no public image links exist.
+- **Cleanup:** deleting a member deletes their image files, and replacing a screenshot deletes the old file. If saving the grades fails, the new file is deleted too.
+- **Consent:** the registration checkbox now mentions that the chair may see Canvas screenshots
+
+### How it was built
+
+1. **Backend:**
+   - the `Screenshot` table
+   - change `POST /submissions` to take grades + image together, all or nothing
+   - add the image route with the checks above
+   - add `Pillow`, and `backend/uploads/` to `.gitignore`
+2. **Submit page:** required picker and paste, Submit disabled until an image is picked, current thumbnail, crop reminder
+3. **Chair:** 📷 button and image popup on the member page, 📷 marker in the members table
+4. **Cleanup on member delete,** plus the consent text
+5. **Tests:**
+   - submitting without an image is rejected and saves nothing
+   - updating a week without a new image is rejected
+   - a new image replaces the old file
+   - a fake image or oversized file is rejected
+   - EXIF is stripped
+   - another member gets 403, and the chair can view
+   - deleting a member removes their files
+   - the existing tests still pass
+6. **Seed and docs:** a couple of sample screenshots in the seed data, then a browser check and doc update
+
+An existing database doesn't need a reset: the backend creates the new `screenshot` table on startup, and weeks submitted before this feature simply have no screenshot.
+
+`backend/screenshots.py` has the image checks, the file storage and the `GET /screenshots/{id}` route. The submit route lives in `member_routes.py`. Big images are shrunk to 2500 px on the longest side.
+
+### Later, not part of the MVP
+
+- **Chair verify** / "Doesn't match" buttons, logged, with a mismatch flag
+- **Spot checks:** randomly pick members to check in person
+- **Reading the screenshot** with OCR or an AI vision model, to compare it with the typed grades or fill them in automatically
+- **Deleting old screenshots** automatically some time after the term ends
+
+Reading grades straight from Canvas isn't possible right now: K-State blocks student access tokens, and the official route needs university approval. Screenshots can also be edited before they're taken, so they're a check, not proof. The end-of-term transcript is still the real verification.
 
 ## Future work
 

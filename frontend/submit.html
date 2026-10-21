@@ -20,7 +20,16 @@
       <div id="grade-rows"></div>
       <div class="gpa-preview">Estimated GPA: <strong id="gpa-preview">–</strong></div>
 
-      <button type="submit" id="submit-btn">Submit</button>
+      <div class="shot-box">
+        <label>Canvas screenshot <span class="muted">(required)</span>
+          <input type="file" id="shot-input" accept="image/png,image/jpeg,image/webp">
+        </label>
+        <p class="muted">Take a screenshot of your Canvas grades page. You can also paste it here with Ctrl+V. Crop out your student ID and anything that isn't your grades. PNG, JPG or WebP, up to 5 MB.</p>
+        <div id="shot-preview"></div>
+        <div id="current-shot"></div>
+      </div>
+
+      <button type="submit" id="submit-btn" disabled>Submit</button>
       <div class="message" id="grade-message"></div>
     </form>
 
@@ -40,6 +49,12 @@
     let courses = [];
     let scale = [];
     let history = null;
+    // the screenshot picked or pasted for this submission
+    let chosenShot = null;
+    // object urls for the two thumbnails, freed when they're replaced
+    let previewUrl = null;
+    let currentUrl = null;
+    const MAX_SHOT_BYTES = 5 * 1024 * 1024;
 
     async function load() {
       const term = await getCurrentTerm();
@@ -95,6 +110,10 @@
       } catch (err) {
         showMessage("grade-message", err.message, "error");
       }
+      // another week was picked while this one loaded, so this answer is old
+      if (Number(document.getElementById("week").value) !== weekId) {
+        return;
+      }
       const week = weeks.find((w) => w.id === weekId);
       const past = history.weeks.find((w) => w.week_id === weekId);
 
@@ -113,6 +132,10 @@
         note = "This week is past due, so it will be marked late.";
       }
       document.getElementById("week-note").textContent = note;
+
+      // a new week needs its own screenshot
+      setShot(null);
+      showCurrentShot(past);
 
       const rows = document.getElementById("grade-rows");
       rows.innerHTML = "";
@@ -163,6 +186,82 @@
       document.getElementById("gpa-preview").textContent = formatGpa(gpa);
     }
 
+    // screenshots
+
+    function setShot(file) {
+      const preview = document.getElementById("shot-preview");
+      preview.innerHTML = "";
+      chosenShot = null;
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+        previewUrl = null;
+      }
+
+      if (file) {
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+          showMessage("grade-message", "The screenshot has to be a PNG, JPG or WebP image.", "error");
+        } else if (file.size > MAX_SHOT_BYTES) {
+          showMessage("grade-message", "The screenshot is too large (5 MB max). Try cropping it.", "error");
+        } else {
+          chosenShot = file;
+          showMessage("grade-message", "", "");
+          const img = el("img", { class: "shot-thumb", alt: "Screenshot you picked" });
+          previewUrl = URL.createObjectURL(file);
+          img.src = previewUrl;
+          preview.appendChild(el("div", { class: "muted" }, "New screenshot:"));
+          preview.appendChild(img);
+        }
+      }
+      if (!chosenShot) {
+        document.getElementById("shot-input").value = "";
+      }
+      document.getElementById("submit-btn").disabled = chosenShot === null;
+    }
+
+    // what they already sent for this week, a new one is still needed to update
+    async function showCurrentShot(past) {
+      const box = document.getElementById("current-shot");
+      box.innerHTML = "";
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+        currentUrl = null;
+      }
+      if (!past || !past.screenshot_id) {
+        return;
+      }
+      try {
+        const img = el("img", { class: "shot-thumb", alt: "Screenshot you sent for this week" });
+        img.src = await screenshotUrl(past.screenshot_id);
+        // skip it if they switched weeks while it loaded
+        if (Number(document.getElementById("week").value) !== past.week_id) {
+          URL.revokeObjectURL(img.src);
+          return;
+        }
+        currentUrl = img.src;
+        box.appendChild(el("div", { class: "muted" }, "Screenshot you sent for this week. Updating needs a new one."));
+        box.appendChild(img);
+      } catch (err) {
+        box.appendChild(el("div", { class: "muted" }, err.message));
+      }
+    }
+
+    document.getElementById("shot-input").addEventListener("change", (e) => {
+      setShot(e.target.files[0] || null);
+    });
+
+    // ctrl+v anywhere on the page
+    document.addEventListener("paste", (e) => {
+      let items = [];
+      if (e.clipboardData && e.clipboardData.items) {
+        items = [...e.clipboardData.items];
+      }
+      const item = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+      if (item) {
+        e.preventDefault();
+        setShot(item.getAsFile());
+      }
+    });
+
     document.getElementById("week").addEventListener("change", renderWeek);
 
     document.getElementById("grade-form").addEventListener("submit", async (e) => {
@@ -173,8 +272,12 @@
       });
 
       const weekId = Number(document.getElementById("week").value);
+      if (!chosenShot) {
+        showMessage("grade-message", "Add a screenshot of your Canvas grades first.", "error");
+        return;
+      }
       try {
-        const res = await submitWeek(weekId, grades);
+        const res = await submitWeek(weekId, grades, chosenShot);
         await load();
         document.getElementById("week").value = weekId;
         await renderWeek();

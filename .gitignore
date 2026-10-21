@@ -6,3 +6,4 @@ venv/
 .env
 .secret_key
 .pytest_cache/
+backend/uploads/
