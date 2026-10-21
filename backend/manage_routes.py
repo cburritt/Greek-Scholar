@@ -26,12 +26,20 @@ from models import (
     NoteIn,
     NoteOut,
     ReasonIn,
+    Screenshot,
     Submission,
     User,
     UserOut,
     Week,
 )
-from tracking import CLASS_FLAG_KINDS, FLAG_KINDS, current_term, started_weeks, user_history
+from screenshots import delete_file
+from tracking import (
+    CLASS_FLAG_KINDS,
+    FLAG_KINDS,
+    current_term,
+    started_weeks,
+    user_history,
+)
 
 router = APIRouter(tags=["chair management"])
 
@@ -312,6 +320,7 @@ def delete_member(user_id: int, data: DeleteMemberIn, chair: User = Depends(requ
 
     course_ids = list(session.exec(select(Course.id).where(Course.user_id == member.id)).all())
     sub_ids = list(session.exec(select(Submission.id).where(Submission.user_id == member.id)).all())
+    image_files = list(session.exec(select(Screenshot.file_name).where(Screenshot.submission_id.in_(sub_ids))).all())
 
     # children first so foreign keys are never left pointing at nothing
     session.execute(
@@ -326,6 +335,7 @@ def delete_member(user_id: int, data: DeleteMemberIn, chair: User = Depends(requ
     session.execute(delete(FlagMute).where(FlagMute.user_id == member.id))
     session.execute(delete(Note).where(Note.user_id == member.id))
     session.execute(delete(ClassGrade).where(ClassGrade.submission_id.in_(sub_ids)))
+    session.execute(delete(Screenshot).where(Screenshot.submission_id.in_(sub_ids)))
     session.execute(delete(Submission).where(Submission.user_id == member.id))
     session.execute(delete(Course).where(Course.user_id == member.id))
     session.delete(member)
@@ -333,6 +343,10 @@ def delete_member(user_id: int, data: DeleteMemberIn, chair: User = Depends(requ
     # one row is kept so the chair can see a delete happened, without who it was
     log(session, chair.id, "delete_member", None, reason=data.reason.strip())
     session.commit()
+
+    # the image files go once the rows are gone
+    for name in image_files:
+        delete_file(name)
     return {"message": "Member and all their data were deleted"}
 
 

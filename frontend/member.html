@@ -138,7 +138,7 @@
 
       renderGpaChart("gpa-chart", weeks);
       renderClassChart("class-chart", weeks);
-      renderHistoryTable(weeks, true, { onMute, onUnmute, onCorrect });
+      renderHistoryTable(weeks, true, { onMute, onUnmute, onCorrect, onScreenshot });
 
       const weekSelect = document.getElementById("note-week");
       const chosen = weekSelect.value;
@@ -169,6 +169,20 @@
 
     async function onUnmute(flag) {
       act("message", () => unmuteFlag(flag.mute_id));
+    }
+
+    // canvas screenshots, just for the chair to look at
+
+    async function onScreenshot(week) {
+      let url;
+      try {
+        url = await screenshotUrl(week.screenshot_id);
+      } catch (err) {
+        showMessage("message", err.message, "error");
+        return;
+      }
+      const lines = week.classes.map((c) => c.code + ": " + c.percent + "% " + (c.letter || ""));
+      imageDialog(member.name + " · week " + week.number, url, lines);
     }
 
     // grade corrections

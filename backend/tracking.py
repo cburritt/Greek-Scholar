@@ -4,7 +4,21 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from grading import calc_gpa, letter_and_points
-from models import ClassGrade, ClassResult, Course, FlagMute, FlagOut, FlagRule, GradeScale, Submission, Term, User, Week, WeekResult
+from models import (
+    ClassGrade,
+    ClassResult,
+    Course,
+    FlagMute,
+    FlagOut,
+    FlagRule,
+    GradeScale,
+    Screenshot,
+    Submission,
+    Term,
+    User,
+    Week,
+    WeekResult,
+)
 
 # kind, default threshold, on by default
 DEFAULT_FLAG_RULES = [
@@ -97,6 +111,9 @@ def user_history(
     courses = session.exec(select(Course).where(Course.user_id == user.id)).all()
     course_by_id = {c.id: c for c in courses}
 
+    shots = session.exec(select(Screenshot).where(Screenshot.submission_id.in_([s.id for s in submissions]))).all()
+    shot_by_sub = {s.submission_id: s.id for s in shots}
+
     results = []
     previous = None
     for week in weeks:
@@ -110,6 +127,7 @@ def user_history(
 
         if sub is not None:
             result.submitted_at = sub.submitted_at
+            result.screenshot_id = shot_by_sub.get(sub.id)
             gpa_entries = []
             for g in grades_by_sub.get(sub.id, []):
                 course = course_by_id.get(g.course_id)

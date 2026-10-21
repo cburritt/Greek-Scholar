@@ -2,18 +2,36 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
 import chair_routes
 import manage_routes
 import member_routes
-from auth import DUMMY_HASH, create_token, get_current_user, hash_password, verify_password
+import screenshots
+from auth import (
+    DUMMY_HASH,
+    create_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
 from database import create_db, get_session
 from grading import load_scale
-from models import GradeScale, HouseSettings, RegisterIn, Submission, Term, TokenOut, User, UserOut, WeekOut
+from models import (
+    GradeScale,
+    HouseSettings,
+    RegisterIn,
+    Submission,
+    Term,
+    TokenOut,
+    User,
+    UserOut,
+    WeekOut,
+)
 from tracking import current_term, started_weeks, week_status
 
 
@@ -33,9 +51,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# a screenshot is 5 MB at most, so anything much bigger is refused before it's read
+MAX_REQUEST_BYTES = 6 * 1024 * 1024
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    length = request.headers.get("content-length")
+    if length is not None and length.isdigit() and int(length) > MAX_REQUEST_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "The upload is too large (5 MB max for a screenshot)"})
+    return await call_next(request)
+
+
 app.include_router(member_routes.router)
 app.include_router(chair_routes.router)
 app.include_router(manage_routes.router)
+app.include_router(screenshots.router)
 
 
 def token_for(user: User) -> TokenOut:

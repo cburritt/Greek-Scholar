@@ -1,4 +1,7 @@
+import io
+import json
 import os
+import shutil
 import sys
 import tempfile
 from datetime import date, datetime, timedelta
@@ -9,6 +12,7 @@ import pytest
 # point the app at a throwaway database and key before it is imported
 TEST_DIR = tempfile.mkdtemp(prefix="greek-scholar-tests-")
 os.environ["GS_DB_PATH"] = str(Path(TEST_DIR) / "test.db")
+os.environ["GS_UPLOAD_DIR"] = str(Path(TEST_DIR) / "uploads")
 os.environ["SECRET_KEY"] = "test-secret-key-that-is-long-enough-for-hs256"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -25,7 +29,8 @@ PASSWORD = "password123"
 
 @pytest.fixture
 def client():
-    # fresh database for every test
+    # fresh database and empty uploads folder for every test
+    shutil.rmtree(os.environ["GS_UPLOAD_DIR"], ignore_errors=True)
     SQLModel.metadata.drop_all(engine)
     create_db()
     with TestClient(app) as c:
@@ -95,12 +100,39 @@ def add_course(client, auth, code, credits=3):
     return res.json()["id"]
 
 
-def submit(client, auth, week_id, grades):
+def make_image(fmt="PNG", size=(200, 100), color="white", exif=None):
+    # a small real image made on the fly
+    from PIL import Image
+
+    img = Image.new("RGB", size, color)
+    out = io.BytesIO()
+    if exif is not None:
+        img.save(out, format=fmt, exif=exif)
+    else:
+        img.save(out, format=fmt)
+    return out.getvalue()
+
+
+def submit(client, auth, week_id, grades, image="png", filename="shot.png", content_type="image/png"):
+    # grades and the screenshot go together as a form, image=None leaves the screenshot out
+    files = None
+    if image == "png":
+        image = make_image()
+    if image is not None:
+        files = {"screenshot": (filename, image, content_type)}
     return client.post(
         "/submissions",
-        json={"week_id": week_id, "grades": [{"course_id": c, "percent": p} for c, p in grades.items()]},
+        data={"week_id": str(week_id), "grades": json.dumps([{"course_id": c, "percent": p} for c, p in grades.items()])},
+        files=files,
         headers=auth,
     )
+
+
+def upload_files():
+    folder = Path(os.environ["GS_UPLOAD_DIR"])
+    if not folder.exists():
+        return []
+    return sorted(p.name for p in folder.iterdir())
 
 
 def user_exists(user_id):

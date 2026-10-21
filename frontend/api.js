@@ -28,7 +28,8 @@ async function request(method, path, body) {
   }
 
   const options = { method, headers };
-  if (body instanceof URLSearchParams) {
+  // forms and file uploads set their own content type
+  if (body instanceof URLSearchParams || body instanceof FormData) {
     options.body = body;
   } else if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -120,7 +121,30 @@ const getCourses = (includeDropped) => request("GET", "/courses" + query({ inclu
 const addCourse = (code, name, credits) => request("POST", "/courses", { code, name, credits });
 const dropCourse = (id) => request("DELETE", "/courses/" + id);
 const getWeekCourses = (weekId) => request("GET", "/weeks/" + weekId + "/courses");
-const submitWeek = (weekId, grades) => request("POST", "/submissions", { week_id: weekId, grades });
+// grades and the canvas screenshot are sent together, the backend saves both or neither
+function submitWeek(weekId, grades, screenshot) {
+  const form = new FormData();
+  form.append("week_id", weekId);
+  form.append("grades", JSON.stringify(grades));
+  form.append("screenshot", screenshot, screenshot.name || "screenshot.png");
+  return request("POST", "/submissions", form);
+}
+
+// images need the login token, so they're downloaded and shown from memory instead of a plain link
+async function screenshotUrl(id) {
+  let res;
+  try {
+    res = await fetch(API_BASE + "/screenshots/" + id, {
+      headers: { Authorization: "Bearer " + sessionStorage.getItem(TOKEN_KEY) },
+    });
+  } catch (err) {
+    throw new Error("Can't reach the server. Is the backend running on port 8000?");
+  }
+  if (!res.ok) {
+    throw new Error("Couldn't load the screenshot (" + res.status + ")");
+  }
+  return URL.createObjectURL(await res.blob());
+}
 const getMyHistory = () => request("GET", "/submissions/me");
 
 // chair

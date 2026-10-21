@@ -2,16 +2,29 @@
 # usage: python seed.py [--sample] [email] [password]
 #   --sample also adds demo members with classes and weekly grades
 
+import io
 import random
 import sys
 from datetime import date, datetime, time, timedelta
 
+from PIL import Image, ImageDraw, ImageFont
 from sqlmodel import Session, select
 
 from audit import fmt_percent, log
 from auth import hash_password
 from database import create_db, engine
-from models import ClassGrade, Course, FlagMute, Note, Submission, Term, User, Week
+from models import (
+    ClassGrade,
+    Course,
+    FlagMute,
+    Note,
+    Screenshot,
+    Submission,
+    Term,
+    User,
+    Week,
+)
+from screenshots import clean_image, save_file
 from tracking import generate_weeks
 
 args = [a for a in sys.argv[1:] if a != "--sample"]
@@ -135,15 +148,42 @@ def seed_sample(session: Session, term: Term):
             session.commit()
             session.refresh(sub)
 
+            shot_rows = []
             for c in courses:
                 if drop_after is not None and c is courses[-1] and week.number > drop_after:
                     continue
                 base[c.id] = min(100, max(40, base[c.id] + trend + rng.uniform(-3, 3)))
-                session.add(ClassGrade(submission_id=sub.id, course_id=c.id, percent=round(base[c.id], 1)))
+                percent = round(base[c.id], 1)
+                session.add(ClassGrade(submission_id=sub.id, course_id=c.id, percent=percent))
+                shot_rows.append((c.code, percent))
+
+            # every submission comes with a screenshot now
+            image, content_type, ext = clean_image(fake_canvas(name, week.number, shot_rows))
+            session.add(Screenshot(submission_id=sub.id, file_name=save_file(image, ext), content_type=content_type, size=len(image)))
             session.commit()
 
     print(f"added {len(SAMPLE_MEMBERS)} sample members (password test123)")
     seed_management(session, weeks, now)
+
+
+def fake_canvas(name: str, week_number: int, rows: list[tuple[str, float]]) -> bytes:
+    # a plain picture that looks a bit like a canvas grades page, just for the demo
+    img = Image.new("RGB", (720, 120 + 44 * len(rows)), "white")
+    draw = ImageDraw.Draw(img)
+    big = ImageFont.load_default(size=26)
+    small = ImageFont.load_default(size=20)
+    draw.rectangle([0, 0, 720, 64], fill="#2d3b45")
+    draw.text((24, 18), "Canvas  ·  Grades", fill="white", font=big)
+    draw.text((24, 76), f"{name}  ·  week {week_number}  (sample)", fill="#6b7280", font=small)
+    y = 112
+    for code, percent in rows:
+        draw.line([24, y - 6, 696, y - 6], fill="#e2e5ea")
+        draw.text((24, y), code, fill="#1f2430", font=small)
+        draw.text((560, y), f"{percent:g}%", fill="#1f2430", font=small)
+        y += 44
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 
 def seed_management(session: Session, weeks: list[Week], now: datetime):

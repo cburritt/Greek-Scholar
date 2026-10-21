@@ -106,7 +106,7 @@ function renderHouseChart(canvasId, stats) {
 }
 
 // newest week first, one column per class
-// actions (chair only): { onMute(week, flag), onUnmute(flag), onCorrect(week) }
+// actions (chair only): { onMute(week, flag), onUnmute(flag), onCorrect(week), onScreenshot(week) }
 function renderHistoryTable(weeks, showFlags, actions) {
   const codes = allClassCodes(weeks);
 
@@ -133,6 +133,11 @@ function renderHistoryTable(weeks, showFlags, actions) {
 
     const weekCell = el("td", { class: "nowrap" }, "Week " + w.number);
     weekCell.appendChild(el("div", { class: "muted" }, "due " + formatDate(w.due_at)));
+    if (actions && w.screenshot_id) {
+      const shot = el("button", { type: "button", class: "secondary small shot-btn", title: "View Canvas screenshot" }, "📷 View");
+      shot.addEventListener("click", () => actions.onScreenshot(w));
+      weekCell.appendChild(shot);
+    }
     tr.appendChild(weekCell);
 
     const statusCell = el("td");

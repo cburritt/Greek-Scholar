@@ -31,8 +31,10 @@ uvicorn main:app --port 8000
 Frontend (from the repo root):
 
 ```bash
-python -m http.server 5500 --directory frontend
+python serve_frontend.py
 ```
+
+This is a tiny server that tells the browser not to cache, so code changes show up on a normal reload. (`python -m http.server 5500 --directory frontend` also works, but the browser may keep old copies of the scripts; press Ctrl+Shift+R if a change doesn't show.)
 
 Then open http://localhost:5500
 
@@ -44,6 +46,8 @@ The API docs are at http://localhost:8000/docs
 |---|---|---|
 | Chair | chair@test.com | chair123 |
 | Member | alex@test.com, jordan@test.com, sam@test.com, taylor@test.com, morgan@test.com, casey@test.com, riley@test.com | test123 |
+
+Every sample submission has a generated "Canvas" screenshot, so the 📷 buttons work. Those images are in `backend/uploads/`, which is git-ignored.
 
 Jordan's grades trend down, so that account shows the most flags. It also has a sample note, a corrected grade and a muted flag. Riley is deactivated, so Riley can't log in and only shows up with "Show inactive members".
 
@@ -62,7 +66,7 @@ The tests use their own throwaway database, so they never touch `grades.db`.
 
 ## Start over
 
-Stop the backend, delete `backend/grades.db`, and run `python seed.py --sample` again. You have to do this after pulling changes that add database columns; the backend will tell you if so.
+Stop the backend, delete `backend/grades.db`, and run `python seed.py --sample` again. You have to do this after pulling changes that add database columns; the backend will tell you if so. You can also delete `backend/uploads/` to clear old screenshots.
 
 ## Notes
 

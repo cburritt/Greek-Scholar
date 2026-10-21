@@ -5,7 +5,6 @@ from typing import Optional
 from pydantic import NaiveDatetime, field_validator
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
-
 # tables
 
 class User(SQLModel, table=True):
@@ -71,6 +70,16 @@ class ClassGrade(SQLModel, table=True):
     # set when the chair corrects this grade, cleared when the member resubmits
     corrected_at: Optional[NaiveDatetime] = None
     corrected_by: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
+class Screenshot(SQLModel, table=True):
+    # one canvas screenshot per submission, the file itself lives in backend/uploads
+    id: Optional[int] = Field(default=None, primary_key=True)
+    submission_id: int = Field(foreign_key="submission.id", unique=True)
+    file_name: str
+    content_type: str
+    size: int
+    uploaded_at: NaiveDatetime = Field(default_factory=datetime.now)
 
 
 class GradeScale(SQLModel, table=True):
@@ -243,6 +252,7 @@ class WeekResult(SQLModel):
     gpa_change: Optional[float] = None
     classes: list[ClassResult] = []
     flags: list[FlagOut] = []
+    screenshot_id: Optional[int] = None
 
 
 class MemberRow(SQLModel):
@@ -257,6 +267,7 @@ class MemberRow(SQLModel):
     gpa_change: Optional[float] = None
     classes: list[ClassResult] = []
     flags: list[FlagOut] = []
+    screenshot_id: Optional[int] = None
 
 
 class HistoryOut(SQLModel):

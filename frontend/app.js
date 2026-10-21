@@ -120,6 +120,39 @@ function activeFlags(flags) {
   return flags.filter((f) => !f.muted);
 }
 
+// shows an image in a popup next to a short list of text, frees the image when closed
+function imageDialog(title, url, lines) {
+  const dialog = el("dialog", { class: "dialog wide" });
+  dialog.appendChild(el("h3", {}, title));
+
+  const body = el("div", { class: "shot-view" });
+  const img = el("img", { alt: title });
+  img.src = url;
+  body.appendChild(img);
+
+  const side = el("div");
+  side.appendChild(el("div", { class: "muted" }, "Grades they typed"));
+  lines.forEach((line) => side.appendChild(el("div", {}, line)));
+  const full = el("a", { href: url, target: "_blank", rel: "noopener" }, "Open full size");
+  side.appendChild(el("p", {}, ""));
+  side.lastChild.appendChild(full);
+  body.appendChild(side);
+  dialog.appendChild(body);
+
+  const close = el("button", { type: "button", class: "secondary" }, "Close");
+  close.addEventListener("click", () => dialog.close());
+  const row = el("div", { class: "row" });
+  row.appendChild(close);
+  dialog.appendChild(row);
+
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    URL.revokeObjectURL(url);
+  });
+  document.body.appendChild(dialog);
+  dialog.showModal();
+}
+
 // a small form in a popup, resolves to the filled in values or null if cancelled
 // fields: [{ name, label, type: "text" | "number" | "textarea" | "select", value, options, required, min, max, step }]
 function formDialog(title, fields, confirmText, danger, help) {

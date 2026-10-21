@@ -4,3 +4,4 @@ sqlmodel
 bcrypt
 pyjwt
 python-multipart
+pillow
